@@ -188,3 +188,22 @@ Recovers the exact dispatch graph, backend choice, tensor layout and per-kernel 
 Current blocker: `CreateTechnique` throws `std::bad_function_call` while building the QMFNet graph (two worker
 threads), before `clBuildProgram`/dispatch. Next: get past it to capture the kernel build defines
 (`MODEL_INPUT_STRIDE_BYTES`, `NUM_TILES`), `clSetKernelArg` layout and NDRange sizes — the SR tensor layout.
+
+## Phase 2 trace — results and the chip gate (2026-11-19)
+Pushing the trace further revealed ANF's per-chip gating and the SR kernel layout:
+- **Chip gate:** ANF matches an internal codename against magic ints — `0x69776168`="hawi", `"pakala"`, `"glymur"`
+  (and `"kaanapali"`, `"trenton"`). An **unrecognized chip leaves a per-chip functor empty → `std::bad_function_call`**
+  in `CreateTechnique`. Reporting `CL_DEVICE_NAME`="hawi" (shim env `ANF_CHIP`) gets past the crash. VERIFIED
+- After the chip is recognized, ANF **deadlocks** (0% CPU, sleeping) building the graph — a worker/condvar sync it
+  assumes, which qemu-user's timing doesn't satisfy. A full live dispatch capture is blocked here. VERIFIED
+- **SR model-input layout (static, from the decompile):** preprocess built from `preprocess_qmfnet_v2.cl` with
+  `-DINPUT_WIDTH -DINPUT_HEIGHT -DMODEL_INPUT_STRIDE_BYTES -DNUM_TILES`, plus `-DDEPTH_FP32` (fp32 depth) and
+  `-DUINT8_PACKING` (uint8 vs int8 activations). `MODEL_INPUT_STRIDE_BYTES` ≈ 28 (7×u32) per pixel for the 20-channel
+  int8 input (matches `preprocess.cl`'s `*7` word stride). SOURCED (decompile) + ASSUMED (exact channel order).
+- **Conv kernel argument layout** (`FUN_00217da8` records cl args): 9 args — sizes 8,8,8,8,4,4,4,8,8 bytes
+  (four cl_mem buffers, three u32 scalars = dims/strides, two more buffers). SOURCED (decompile).
+
+**Net:** the trace proved ANF accepts the spoofed device and runs through `IsTechniqueSupported`/`SetAdapterInfo`/into
+`CreateTechnique`, and (with static analysis) yielded the SR resource contract, build defines and kernel arg layout.
+The one thing still missing for bit-exact SR — the exact per-channel byte packing of the 20-channel input — remains in
+Adreno asm; completing it needs either the deadlock resolved (real arm64 Linux/Android, not qemu-user) or a device.

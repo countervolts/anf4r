@@ -16,3 +16,9 @@ int __system_property_get(const char* name, char* value){
     if(value){ strncpy(value, v, 91); value[91]=0; }
     return (int)strlen(v);
 }
+
+#include <unistd.h>
+#include <pthread.h>
+// Keep the process alive when a worker thread calls abort() (via std::terminate): park that thread so the
+// main thread can continue far enough to emit the kernel build defines / args we want to capture.
+void abort(void){ LOG("[abort intercepted — parking thread]"); for(;;) pause(); }

@@ -64,7 +64,7 @@ int main(int argc, char** argv){
     AnfSRCreateInfo sci; memset(&sci,0,sizeof sci); sci.header.type=ANF_STYPE_SR_CREATE_INFO;
     sci.inputSize.width=IW; sci.inputSize.height=IH; sci.outputSize.width=IW*2; sci.outputSize.height=IH*2;
     AnfTechniqueCreateInfo tci; memset(&tci,0,sizeof tci); tci.header.type=ANF_STYPE_TECHNIQUE_CREATE_INFO;
-    tci.techniqueId=tid; tci.flags=ANF_TECHNIQUE_CREATE_FLAG_DISPATCH_IMMEDIATE; tci.maxInFlight=2;
+    tci.techniqueId=tid; tci.flags=0; tci.maxInFlight=2;
     tci.pClientApiCreateInfo=&vci.header; tci.pTechniqueGroupCreateInfo=&sci.header;
     AnfTechnique tech=0;
     if(anf.CreateTechnique) CK(anf.CreateTechnique(inst,&tci,&tech));
@@ -85,7 +85,7 @@ int main(int argc, char** argv){
         AnfSRDispatch srd; memset(&srd,0,sizeof srd); srd.header.type=ANF_STYPE_SR_DISPATCH; srd.jitterOffset.x=0.1f; srd.jitterOffset.y=-0.2f;
         AnfTechniqueDispatchImmediateInfo imm; memset(&imm,0,sizeof imm); imm.header.type=ANF_STYPE_TECHNIQUE_DISPATCH_IMMEDIATE_INFO;
         AnfTechniqueDispatchInfo di; memset(&di,0,sizeof di); di.header.type=ANF_STYPE_TECHNIQUE_DISPATCH_INFO;
-        di.header.pNext=&imm.header; di.commandList=0; di.pResources=res; di.numResources=4; di.reset=ANF_TRUE; di.pTechniqueGroupDispatchInfo=&srd.header;
+        di.header.pNext=0; di.commandList=(AnfClientCommandList)(uintptr_t)0x6001; di.pResources=res; di.numResources=4; di.reset=ANF_TRUE; di.pTechniqueGroupDispatchInfo=&srd.header;
         for(int frame=0; frame<3; ++frame){ di.reset = frame==0?ANF_TRUE:ANF_FALSE; fprintf(stderr,"--- dispatch frame %d ---\n",frame); CK(anf.DispatchTechnique(tech,&di)); }
     }
     fprintf(stderr,"harness done\n");

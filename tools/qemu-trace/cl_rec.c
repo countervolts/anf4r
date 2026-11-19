@@ -21,7 +21,7 @@ cl_int clGetPlatformInfo(cl_platform_id p, cl_uint pn, cl_size sz, void* v, cl_s
 cl_int clGetDeviceIDs(cl_platform_id p, cl_ulong t, cl_uint n, cl_device_id* d, cl_uint* num){ LOG("clGetDeviceIDs"); if(num)*num=1; if(d&&n)d[0]=FAKE(2); return CL_SUCCESS; }
 cl_int clGetDeviceInfo(cl_device_id dev, cl_uint pn, cl_size sz, void* v, cl_size* r){
     // Report an Adreno 840 with the QCOM extensions and generous limits.
-    if(pn==0x102B){ const char* s="Adreno (TM) 840"; if(v&&sz)strncpy(v,s,sz); if(r)*r=strlen(s)+1; LOG("clGetDeviceInfo NAME"); return CL_SUCCESS; }
+    if(pn==0x102B){ const char* s=getenv("ANF_CHIP")?getenv("ANF_CHIP"):"hawi"; if(v&&sz)strncpy(v,s,sz); if(r)*r=strlen(s)+1; LOG("clGetDeviceInfo NAME=%s",s); return CL_SUCCESS; }
     if(pn==0x1030){ const char* s="cl_qcom_recordable_queues cl_khr_fp16 cl_qcom_inline_asm cl_qcom_extra_vector_types cl_qcom_subgroup_uniform_load cl_qcom_filter_bicubic cl_khr_external_memory cl_khr_external_semaphore cl_qcom_ml_ops cl_qcom_accelerated_image_ops"; if(v&&sz)strncpy(v,s,sz); if(r)*r=strlen(s)+1; LOG("clGetDeviceInfo EXTENSIONS"); return CL_SUCCESS; }
     // sane per-query values (avoid huge allocations)
     switch(pn){
