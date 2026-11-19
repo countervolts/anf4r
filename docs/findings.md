@@ -153,3 +153,20 @@ Exact per-frame dispatch order and push-constant values come from the full Ghidr
   reference (not committed; regenerate with `build/ghidra/decompile_pyghidra.py`).
 - Model architectures (from `modelconfig.json`): SR QMFNet = cnn1(20→32,s2) → cnn2-0 → cnn2-1 (32→32) → cnn3(32→64,
   ConvBlend); 64 per-jitter weight sets. FG LR = 14 convs 32→96→…→64→20; FG QR = 14 convs 32→…→20.
+
+## Phase 2 (qemu trace) setup + SR input structure (2026-11-19)
+From the full decompile + readable `preprocess_qmfnet_v2.cl`:
+- **SR runs on the OpenCL (Adreno) backend.** Preprocess program `preprocess_qmfnet_v2.cl`, built with
+  `-DINPUT_WIDTH -DINPUT_HEIGHT -DMODEL_INPUT_STRIDE_BYTES -DNUM_TILES`; convs are the tiled MxM OpenCL kernels
+  (`-DTILESIZE_M/N/K -DIC -DOC -DSTRIDE ...`). No portable SPIR-V SR preprocess, so numeric reference needs the trace.
+- **SR is a recurrent temporal net.** Preprocess inputs: `color_lr` (R11G11B10), `depth_lr` (D24S8 or fp32),
+  `mv_lr` (fp16 G16R16), `prev_color_hr`, **`prev_feature_hr`** (previous-frame hidden features fed back). Outputs:
+  `model_input` (the 20-ch int8 tensor), `color_lr_rgba_fp16`, `previous_color_warped_hr_rgba_fp16`. The 20 channels =
+  color(3)+depth(1)+mv(2)+prev-warped-color + prev-feature (the recurrent state). Exact byte packing is in the asm
+  `mm_store`; the trace captures `MODEL_INPUT_STRIDE_BYTES`, `NUM_TILES`, bound images and arg layout to pin it.
+
+**Trace plan (`tools/qemu-trace/`):** run `libanf.so` under qemu-aarch64 with Android bionic (linker64 + libc from an
+arm64 system image) and NDK-built recording shims for `libvulkan.so`/`libOpenCL.so` that answer capability checks
+(spoof an Adreno device, matching UUID) and log every call — `clBuildProgram` options, `clCreateKernel` names,
+`clSetKernelArg` values, `clEnqueueNDRangeKernel` sizes, buffer writes — plus a harness driving SR create+dispatch.
+Recovers the exact dispatch graph, backend choice, tensor layout and per-kernel parameters without a device.
