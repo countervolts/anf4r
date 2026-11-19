@@ -124,3 +124,19 @@ Decompiled the loader at `libanf.so:0x1c3904` (the function that calls `uncompre
 - The **portable** parts (12 SPIR-V passes, all weights, quant scales, architecture) are exactly Qualcomm's and run on RADV unchanged.
 - The **convolution kernels** (the heavy compute) exist only as Adreno QASM / Adreno OpenCL binaries / Adreno ML caches. **No form runs on RDNA3.** Running "Qualcomm's own conv kernels unchanged" is impossible on this GPU.
 - To run the network on RDNA3 we must re-express conv2d+ReLU+requant+D2S ourselves (as WMMA/dot-product or plain int8 compute), matching Qualcomm's integer arithmetic and requant rounding. This is a kernel re-implementation with identical math, not a retrain or approximation — but it is NOT the vendor's own kernel binary, and every such kernel must be logged in `docs/divergences.md`. This is the Phase 3 decision for Ayo.
+
+## Phase 3: backend reality and the plan (2026-11-19)
+
+Reflected all 12 SPIR-V passes (`tools/spv_reflect.py` → `build/reflect/*.json`) and read the OpenCL SR kernels. Decisive finding on which ANF path can run on RADV:
+
+- **The 12 `AIFF*_cs` SPIR-V shaders are the Frame-Generation (FRC) Vulkan data path.** Binding/spec names show a two-branch LR→QR flow+mask network with prev/curr-frame blending: `MetaAndLRPackV2` (pack LR net input) → [LR conv net] → `LRUnpackV2`/`LRUpscaleAndQRPackV2` (unpack flow+mask, upscale, pack QR net input) → [QR conv net] → `QRUnpackV2` → `QRBlendV2(FINT)` (blend `texPriorFrame`/`texCurrFrame` by flow+mask). `PreprocessFusedV2`/`PyramidDownscaleFusedV2`/`PrepareInputs`/`UnpackMVV2` build the depth pyramid, dilated/projected MV and depth stats. These are **plain Vulkan compute, run on RADV unchanged.** Resolution is supplied via specialization constants (`AIFF_*_WIDTH/HEIGHT`, quant scales/offsets); per-dispatch params via a push-constant struct.
+- **SR (`aiff-sr-v2s`) has no portable Vulkan glue.** Its Vulkan form is the ARM data-graph (`graphPipeline/upscale/...`, `vkCmdDispatchDataGraphARM` — not on RADV); its OpenCL form (`Kernels_Hawi/*.cl`) is Adreno machine code wrapped in inline asm (`ldib.untyped...`, `getone`, LM layout) — not reconstructable with confidence. Only the SR **weights** (int8 QMFNet, per-jitter) and quant scales are portable.
+
+### Decision (executive control, Ayo away)
+1. **Shared runtime + int8 conv engine + CPU reference first** (needed by both techniques; certain value; self-validatable).
+2. **Frame Generation = primary faithful target**: run the 12 vendor SPIR-V passes **unchanged** + re-implemented FG convs (aiff-frc-lr/qr int8). Most faithful to "run Qualcomm's own kernels" and fully portable.
+3. **Super Resolution = reconstruction target**: same runtime, Qualcomm's SR int8 weights unchanged, with our own SPIR-V pack/conv/unpack/D2S matching the documented quantization (`scales.json`, `network_io_encodings.json`). Logged per-kernel in `docs/divergences.md`. This is the "upscaler" Ayo asked for, delivered honestly as weights-unchanged + reconstructed kernels.
+4. Integration via OptiScaler + vkd3d-proton, following d4r/m4r.
+5. Validation without a device: determinism (repeat-run bit equality), CPU↔GPU conv equality, and a catalogued divergence list. No Adreno ground truth exists (Ayo has no device).
+
+Exact per-frame dispatch order and push-constant values come from the full Ghidra decompile (running) and, if ambiguous, a qemu trace of `libanf.so`.
