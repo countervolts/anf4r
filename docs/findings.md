@@ -170,3 +170,21 @@ arm64 system image) and NDK-built recording shims for `libvulkan.so`/`libOpenCL.
 (spoof an Adreno device, matching UUID) and log every call — `clBuildProgram` options, `clCreateKernel` names,
 `clSetKernelArg` values, `clEnqueueNDRangeKernel` sizes, buffer writes — plus a harness driving SR create+dispatch.
 Recovers the exact dispatch graph, backend choice, tensor layout and per-kernel parameters without a device.
+
+## Phase 2 qemu trace — WORKING (2026-11-19)
+`libanf.so` (ANF SDK 0.43.0) runs under qemu-aarch64 with Android 34 bionic (extracted from the arm64 system image:
+`vendor/bionic/`) and NDK-built recording shims (`tools/qemu-trace/`). Milestones reached, all VERIFIED from the run:
+- `GetAnfFunctions`, `CreateInstance`, `QueryTechniqueRequirements` succeed.
+- **`IsTechniqueSupported(SR)` = SUCCESS** against the spoofed Adreno 840 (OpenCL shim reports QCOM extensions +
+  device; Vulkan shim reports the device/queues/features). The capability spoof works.
+- **`SetInstanceClientAPIAdapterInfo` = SUCCESS.**
+- SR requirements captured: 4 resources; required **device extensions `VK_KHR_external_semaphore_fd`,
+  `VK_KHR_external_memory_fd`**; technique queue flags = GRAPHICS; resource labels 0–3 all TEXTURE2D with 2/1/1/1
+  supported formats. (Confirms the external-memory interop requirement for the OptiScaler/vkd3d path.)
+- ANF dlopens libvulkan, grabs `vkGetInstanceProcAddr`, **dlcloses the handle, then calls it** — needs the lib
+  resident, so the shims are built `-z nodelete`.
+- SR's compute backend is OpenCL: `clCreateContext` is reached inside `CreateTechnique`.
+
+Current blocker: `CreateTechnique` throws `std::bad_function_call` while building the QMFNet graph (two worker
+threads), before `clBuildProgram`/dispatch. Next: get past it to capture the kernel build defines
+(`MODEL_INPUT_STRIDE_BYTES`, `NUM_TILES`), `clSetKernelArg` layout and NDRange sizes — the SR tensor layout.
