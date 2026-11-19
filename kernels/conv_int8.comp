@@ -1,0 +1,51 @@
+#version 450
+// anf4r: int8 NHWC 3x3 convolution + per-output-channel requant + optional ReLU.
+// Reproduces the ANF conv semantics: int8*int8 -> int32 accumulate (order-exact),
+// then requant = float(acc + bias) * scale[oc], ReLU, convert-to-int8 (round-toward-zero + saturate,
+// matching OpenCL convert_char_sat used by the Adreno kernel). See docs/divergences.md.
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(constant_id = 0) const int IN_W  = 1;
+layout(constant_id = 1) const int IN_H  = 1;
+layout(constant_id = 2) const int IC    = 1;
+layout(constant_id = 3) const int OC    = 1;
+layout(constant_id = 4) const int STRIDE= 1;
+layout(constant_id = 5) const int PAD   = 1;
+layout(constant_id = 6) const int RELU  = 1;
+layout(constant_id = 7) const int OUT_W = 1;
+layout(constant_id = 8) const int OUT_H = 1;
+
+layout(std430, binding = 0) readonly  buffer InBuf   { int8_t  v[]; } inp;     // [IN_H][IN_W][IC]
+layout(std430, binding = 1) readonly  buffer WBuf    { int8_t  v[]; } wt;       // [OC][IC][3][3]
+layout(std430, binding = 2) readonly  buffer BBuf    { int32_t v[]; } bias;     // [OC]
+layout(std430, binding = 3) readonly  buffer SBuf    { float   v[]; } scale;    // [OC]
+layout(std430, binding = 4) writeonly buffer OutBuf  { int8_t  v[]; } outp;     // [OUT_H][OUT_W][OC]
+
+void main() {
+    int ox = int(gl_GlobalInvocationID.x);
+    int oy = int(gl_GlobalInvocationID.y);
+    int oc = int(gl_GlobalInvocationID.z);
+    if (ox >= OUT_W || oy >= OUT_H || oc >= OC) return;
+    int acc = 0;
+    for (int ky = 0; ky < 3; ++ky) {
+        int iy = oy * STRIDE + ky - PAD;
+        if (iy < 0 || iy >= IN_H) continue;
+        for (int kx = 0; kx < 3; ++kx) {
+            int ix = ox * STRIDE + kx - PAD;
+            if (ix < 0 || ix >= IN_W) continue;
+            int inBase = (iy * IN_W + ix) * IC;
+            int wBase  = ((oc * IC) * 3 + ky) * 3 + kx;  // [oc][ic][ky][kx], ic stride = 9
+            for (int ic = 0; ic < IC; ++ic) {
+                acc += int(inp.v[inBase + ic]) * int(wt.v[wBase + ic * 9]);
+            }
+        }
+    }
+    float f = float(acc + bias.v[oc]) * scale.v[oc];
+    if (RELU != 0) f = max(f, 0.0);
+    // round toward zero + saturate to int8 (OpenCL convert_char_sat on a post-ReLU value)
+    f = trunc(f);
+    f = clamp(f, -128.0, 127.0);
+    outp.v[(oy * OUT_W + ox) * OC + oc] = int8_t(int(f));
+}

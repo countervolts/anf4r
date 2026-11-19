@@ -140,3 +140,16 @@ Reflected all 12 SPIR-V passes (`tools/spv_reflect.py` → `build/reflect/*.json
 5. Validation without a device: determinism (repeat-run bit equality), CPU↔GPU conv equality, and a catalogued divergence list. No Adreno ground truth exists (Ayo has no device).
 
 Exact per-frame dispatch order and push-constant values come from the full Ghidra decompile (running) and, if ambiguous, a qemu trace of `libanf.so`.
+
+## Phase 4 progress: runtime + conv (2026-11-19)
+- **Vulkan runtime** (`runtime/vk.cpp`, `runtime/pass.cpp`): headless context + adopt-existing-device; a `Pass` builds a
+  compute pipeline from a SPIR-V module using a reflected interface (sampled/storage images, samplers, storage/uniform
+  buffers, spec constants, push constants) with standard descriptor sets.
+- **Premise proven:** vendor shader `AIFFPrepareInputs_cs` builds and dispatches on the 7700 XT, validation-clean
+  (`tests/smoke_pass.cpp`). SPIR-V reflector `tools/spv_reflect.py` emits each pass's interface to `build/reflect/`.
+- **int8 conv** (`kernels/conv_int8.comp`): bit-exact to a CPU reference on real weights across all SR layers. See
+  `docs/divergences.md` D1. The `invpow2` model makes requant exact (power-of-two scales).
+- **Full static decompile** of `libanf.so` (1565 functions) at `build/ghidra/all.c` for host-logic / dispatch-graph
+  reference (not committed; regenerate with `build/ghidra/decompile_pyghidra.py`).
+- Model architectures (from `modelconfig.json`): SR QMFNet = cnn1(20→32,s2) → cnn2-0 → cnn2-1 (32→32) → cnn3(32→64,
+  ConvBlend); 64 per-jitter weight sets. FG LR = 14 convs 32→96→…→64→20; FG QR = 14 convs 32→…→20.
