@@ -1,0 +1,86 @@
+#version 450
+// anf4r FG: int8 NHWC 3x3 conv, per-channel requant. Weights repacked [oc][ky][kx][ic] (ic fastest, 4 per word).
+// Requant follows the Adreno requant_N32/N20 asm (Kernels_Hawi/*.cl): f = fma(scale, float(acc), bias_f);
+// clamp to [LO,HI]; round-half-away-from-zero (rndaz); convert. bias_f = float(bias_i32)*scale (host-precomputed).
+// OUT_MODE 0: int8 NHWC (hidden layers, LO=0 (ReLU), HI=127)
+// OUT_MODE 1: fp16 NHWC out (conv_out of the LR net: relu, dequantised, no rounding), two channels/thread
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(constant_id = 0) const int IN_W = 1;
+layout(constant_id = 1) const int IN_H = 1;
+layout(constant_id = 2) const int IC = 4;
+layout(constant_id = 3) const int OC = 1;
+layout(constant_id = 4) const int STRIDE = 1;
+layout(constant_id = 5) const int OUT_W = 1;
+layout(constant_id = 6) const int OUT_H = 1;
+layout(constant_id = 7) const int OUT_MODE = 0;
+layout(constant_id = 8) const int LO = 0;
+layout(constant_id = 9) const int HI = 127;
+
+layout(std430, binding = 0) readonly buffer InBuf { uint v[]; } inp;       // int8 words
+layout(std430, binding = 1) readonly buffer WBuf  { uint v[]; } wt;        // int8 words [oc][3][3][ic]
+layout(std430, binding = 2) readonly buffer BBuf  { float v[]; } biasf;    // [oc]
+layout(std430, binding = 3) readonly buffer SBuf  { float v[]; } scale;    // [oc]
+layout(std430, binding = 4) writeonly buffer OutBuf { uint v[]; } outp;    // int8 words (mode 0) / half pairs (mode 1)
+layout(std430, binding = 5) writeonly buffer OutB8 { int8_t v[]; } outb;   // int8 view of the same buffer (mode 0)
+
+float rndaz(float x) { return x >= 0.0 ? floor(x + 0.5) : ceil(x - 0.5); }
+
+int convAcc(int ox, int oy, int oc) {
+    int acc = 0;
+    int icw = IC / 4;
+    for (int ky = 0; ky < 3; ++ky) {
+        int iy = oy * STRIDE + ky - 1;
+        if (iy < 0 || iy >= IN_H) continue;
+        for (int kx = 0; kx < 3; ++kx) {
+            int ix = ox * STRIDE + kx - 1;
+            if (ix < 0 || ix >= IN_W) continue;
+            int ib = (iy * IN_W + ix) * icw;
+            int wb = ((oc * 3 + ky) * 3 + kx) * icw;
+            for (int w = 0; w < icw; ++w) {
+                int a = int(inp.v[ib + w]), b = int(wt.v[wb + w]);
+                acc += bitfieldExtract(a, 0, 8) * bitfieldExtract(b, 0, 8)
+                     + bitfieldExtract(a, 8, 8) * bitfieldExtract(b, 8, 8)
+                     + bitfieldExtract(a, 16, 8) * bitfieldExtract(b, 16, 8)
+                     + bitfieldExtract(a, 24, 8) * bitfieldExtract(b, 24, 8);
+            }
+        }
+    }
+    return acc;
+}
+
+
+// float -> fp16 bits, round-to-nearest-even (packHalf2x16's rounding is implementation-defined; RADV truncates)
+uint f2h(float f) {
+    uint b = floatBitsToUint(f); uint s = (b >> 16) & 0x8000u; int e = int((b >> 23) & 0xffu) - 127 + 15; uint m = b & 0x7fffffu;
+    if (((b >> 23) & 0xffu) == 255u) return s | 0x7c00u | (m != 0u ? 0x200u : 0u);
+    if (e >= 31) return s | 0x7c00u;
+    if (e <= 0) {
+        if (e < -10) return s;
+        m |= 0x800000u; int sh = 14 - e; uint r = m >> sh; uint rem = m & ((1u << sh) - 1u); uint hf = 1u << (sh - 1);
+        if (rem > hf || (rem == hf && (r & 1u) != 0u)) ++r;
+        return s | r;
+    }
+    uint r = (uint(e) << 10) | (m >> 13); uint rem = m & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (r & 1u) != 0u)) ++r;
+    return s | r;
+}
+uint packH2(float a, float b) { return f2h(a) | (f2h(b) << 16); }
+
+void main() {
+    int ox = int(gl_GlobalInvocationID.x), oy = int(gl_GlobalInvocationID.y), z = int(gl_GlobalInvocationID.z);
+    if (ox >= OUT_W || oy >= OUT_H) return;
+    if (OUT_MODE == 0) {
+        if (z >= OC) return;
+        precise float f = fma(scale.v[z], float(convAcc(ox, oy, z)), biasf.v[z]);
+        f = min(max(f, float(LO)), float(HI));
+        outb.v[(oy * OUT_W + ox) * OC + z] = int8_t(int(rndaz(f)));
+    } else {
+        int c0 = z * 2;
+        if (c0 >= OC) return;
+        precise float f0 = fma(scale.v[c0], float(convAcc(ox, oy, c0)), biasf.v[c0]);
+        precise float f1 = fma(scale.v[c0 + 1], float(convAcc(ox, oy, c0 + 1)), biasf.v[c0 + 1]);
+        f0 = max(f0, 0.0); f1 = max(f1, 0.0);
+        outp.v[((oy * OUT_W + ox) * OC + c0) / 2] = packH2(f0, f1);
+    }
+}

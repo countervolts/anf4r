@@ -1,0 +1,68 @@
+#version 450
+// anf4r FG: LR net head (conv_out_flow_mask): fp16 activations x fp16 (dequantised) weights, fp32 accumulate,
+// + fp16 bias; no scale/relu (matches Conv2D_64_3_3_20_Relu_mixed.cl requant_N20: add.f bias only).
+// MODE 0 flow: channels 0..15 -> depth-to-space x2 (DCR: c = (dy*2+dx)*4 + k), writes 4 halfs per output pixel
+//              at (2y+dy, 2x+dx); one thread per (x, y, pos) writes 2 words. 
+// MODE 1 mask: channel 16 -> fp16 plane [H][W]; one thread per (xpair, y) writes 1 word.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(constant_id = 0) const int IN_W = 1;
+layout(constant_id = 1) const int IN_H = 1;
+layout(constant_id = 2) const int MODE = 0;
+
+layout(std430, binding = 0) readonly buffer InBuf { uint v[]; } inp;     // half NHWC [H][W][64]
+layout(std430, binding = 1) readonly buffer WBuf  { uint v[]; } wt;      // half [oc][ky][kx][ic] (host-repacked)
+layout(std430, binding = 2) readonly buffer BBuf  { float v[]; } bias;   // fp16 bias widened to float [20]
+layout(std430, binding = 3) writeonly buffer OutBuf { uint v[]; } outp;
+
+float hin(int idx) { uint w = inp.v[idx >> 1]; vec2 h = unpackHalf2x16(w); return (idx & 1) != 0 ? h.y : h.x; }
+float hw(int idx)  { uint w = wt.v[idx >> 1];  vec2 h = unpackHalf2x16(w); return (idx & 1) != 0 ? h.y : h.x; }
+
+float conv(int ox, int oy, int oc) {
+    float acc = 0.0;
+    for (int ky = 0; ky < 3; ++ky) {
+        int iy = oy + ky - 1; if (iy < 0 || iy >= IN_H) continue;
+        for (int kx = 0; kx < 3; ++kx) {
+            int ix = ox + kx - 1; if (ix < 0 || ix >= IN_W) continue;
+            int ib = (iy * IN_W + ix) * 64, wb = ((oc * 3 + ky) * 3 + kx) * 64;
+            for (int c = 0; c < 64; ++c) { precise float p = hin(ib + c) * hw(wb + c); acc += p; }
+        }
+    }
+    return acc + bias.v[oc];
+}
+
+
+// float -> fp16 bits, round-to-nearest-even (packHalf2x16's rounding is implementation-defined; RADV truncates)
+uint f2h(float f) {
+    uint b = floatBitsToUint(f); uint s = (b >> 16) & 0x8000u; int e = int((b >> 23) & 0xffu) - 127 + 15; uint m = b & 0x7fffffu;
+    if (((b >> 23) & 0xffu) == 255u) return s | 0x7c00u | (m != 0u ? 0x200u : 0u);
+    if (e >= 31) return s | 0x7c00u;
+    if (e <= 0) {
+        if (e < -10) return s;
+        m |= 0x800000u; int sh = 14 - e; uint r = m >> sh; uint rem = m & ((1u << sh) - 1u); uint hf = 1u << (sh - 1);
+        if (rem > hf || (rem == hf && (r & 1u) != 0u)) ++r;
+        return s | r;
+    }
+    uint r = (uint(e) << 10) | (m >> 13); uint rem = m & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (r & 1u) != 0u)) ++r;
+    return s | r;
+}
+uint packH2(float a, float b) { return f2h(a) | (f2h(b) << 16); }
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x), y = int(gl_GlobalInvocationID.y), z = int(gl_GlobalInvocationID.z);
+    if (MODE == 0) {
+        if (x >= IN_W || y >= IN_H || z >= 4) return;      // z = position index dy*2+dx
+        int ow = IN_W * 2;
+        int px = x * 2 + (z & 1), py = y * 2 + (z >> 1);
+        float a0 = conv(x, y, z * 4 + 0), a1 = conv(x, y, z * 4 + 1), a2 = conv(x, y, z * 4 + 2), a3 = conv(x, y, z * 4 + 3);
+        int o = (py * ow + px) * 2;
+        outp.v[o] = packH2(a0, a1);
+        outp.v[o + 1] = packH2(a2, a3);
+    } else {
+        int x0 = x * 2;
+        if (x0 >= IN_W || y >= IN_H) return;
+        float m0 = conv(x0, y, 16);
+        float m1 = (x0 + 1 < IN_W) ? conv(x0 + 1, y, 16) : 0.0;
+        outp.v[(y * IN_W + x0) / 2] = packH2(m0, m1);
+    }
+}

@@ -1,0 +1,56 @@
+#version 450
+// anf4r FG: QR net head (conv_out_flow_mask): int8 conv with requant to uint8 including the output zero-point
+// (network_io_encodings offset). Per-channel q = clamp(rndaz(fma(scale,acc,bias_f)) + zp... ) see divergences D3.
+// flow: channels 0..15 depth-to-space x2 (DCR) -> uint8 [2H][2W][4]; mask: channel 16 -> uint8 plane [H][W].
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(constant_id = 0) const int IN_W = 1;
+layout(constant_id = 1) const int IN_H = 1;
+layout(constant_id = 2) const int MODE = 0;
+layout(constant_id = 3) const int OUT_STRIDE_W = 1;   // row pitch (elements) of the flow / mask output buffer
+layout(constant_id = 4) const int FLOW_ZP = 0;
+layout(constant_id = 5) const int MASK_ZP = 0;
+
+layout(std430, binding = 0) readonly buffer InBuf { uint v[]; } inp;      // int8 words [H][W][32]
+layout(std430, binding = 1) readonly buffer WBuf  { uint v[]; } wt;       // int8 [oc][ky][kx][ic]
+layout(std430, binding = 2) readonly buffer BBuf  { float v[]; } biasf;
+layout(std430, binding = 3) readonly buffer SBuf  { float v[]; } scale;
+layout(std430, binding = 4) writeonly buffer OutBuf { uint8_t v[]; } outp;
+
+float rndaz(float x) { return x >= 0.0 ? floor(x + 0.5) : ceil(x - 0.5); }
+
+int acc(int ox, int oy, int oc) {
+    int a = 0;
+    for (int ky = 0; ky < 3; ++ky) {
+        int iy = oy + ky - 1; if (iy < 0 || iy >= IN_H) continue;
+        for (int kx = 0; kx < 3; ++kx) {
+            int ix = ox + kx - 1; if (ix < 0 || ix >= IN_W) continue;
+            int ib = (iy * IN_W + ix) * 8, wb = ((oc * 3 + ky) * 3 + kx) * 8;
+            for (int w = 0; w < 8; ++w) {
+                int p = int(inp.v[ib + w]), q = int(wt.v[wb + w]);
+                a += bitfieldExtract(p, 0, 8) * bitfieldExtract(q, 0, 8) + bitfieldExtract(p, 8, 8) * bitfieldExtract(q, 8, 8)
+                   + bitfieldExtract(p, 16, 8) * bitfieldExtract(q, 16, 8) + bitfieldExtract(p, 24, 8) * bitfieldExtract(q, 24, 8);
+            }
+        }
+    }
+    return a;
+}
+
+uint8_t q8(int ox, int oy, int oc, int zp) {
+    precise float f = fma(scale.v[oc], float(acc(ox, oy, oc)), biasf.v[oc]);   // real value / output_scale
+    f = rndaz(f) + float(zp);
+    f = min(max(f, float(zp)), 255.0);                                         // ReLU in the quantised domain
+    return uint8_t(uint(f));
+}
+
+void main() {
+    int x = int(gl_GlobalInvocationID.x), y = int(gl_GlobalInvocationID.y), z = int(gl_GlobalInvocationID.z);
+    if (x >= IN_W || y >= IN_H) return;
+    if (MODE == 0) {
+        if (z >= 4) return;
+        int px = x * 2 + (z & 1), py = y * 2 + (z >> 1);
+        for (int k = 0; k < 4; ++k) outp.v[(py * OUT_STRIDE_W + px) * 4 + k] = q8(x, y, z * 4 + k, FLOW_ZP);
+    } else {
+        outp.v[y * OUT_STRIDE_W + x] = q8(x, y, 16, MASK_ZP);
+    }
+}
