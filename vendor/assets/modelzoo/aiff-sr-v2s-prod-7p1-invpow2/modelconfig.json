@@ -1,0 +1,233 @@
+{
+    "name": "aiff-sr-v2s-prod-7-invpow2",
+    "precision": "int8",
+    "requant": "invpow2",
+    "layers": [
+        {
+            "name": "cnn1",
+            "type": "Conv",
+            "parameters": {
+                "dilation": [
+                    1,
+                    1
+                ],
+                "kernel_size": [
+                    3,
+                    3
+                ],
+                "padding": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "stride": [
+                    2,
+                    2
+                ]
+            },
+            "input_tensor": {
+                "name": "t.1",
+                "data_type": "int8",
+                "channels": 20,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "output_tensor": {
+                "name": "15",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "weight_tensor": {
+                "weight_tensor_name": "cnn.0.weight",
+                "weight_datatype": "int8",
+                "weight_file_loc": ""
+            },
+            "bias_tensor": {
+                "bias": true,
+                "bias_tensor_name": "cnn.0.bias",                
+                "bias_datatype": "int32"
+            },
+            "jittered" : true,
+            "jitter_index_count" : 64,
+            "activation": "relu"
+        },
+        {
+            "name": "cnn2-0",
+            "type": "Conv",
+            "parameters": {
+                "dilation": [
+                    1,
+                    1
+                ],
+                "kernel_size": [
+                    3,
+                    3
+                ],
+                "padding": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "stride": [
+                    1,
+                    1
+                ]
+            },
+            "input_tensor": {
+                "name": "15",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "output_tensor": {
+                "name": "23",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "weight_tensor": {
+                "weight_tensor_name": "cnn.2.weight",                
+                "weight_datatype": "int8",
+                "weight_file_loc": ""
+            },
+            "bias_tensor": {
+                "bias": true,
+                "bias_tensor_name": "cnn.2.bias",
+                "bias_datatype": "int32"
+            },
+            "activation": "relu"
+        },
+        {
+            "name": "cnn2-1",
+            "type": "Conv",
+            "parameters": {
+                "dilation": [
+                    1,
+                    1
+                ],
+                "kernel_size": [
+                    3,
+                    3
+                ],
+                "padding": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "stride": [
+                    1,
+                    1
+                ]
+            },
+            "input_tensor": {
+                "name": "23",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "output_tensor": {
+                "name": "31",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "weight_tensor": {
+                "weight_tensor_name": "cnn.4.weight",
+                "weight_datatype": "int8",
+                "weight_file_loc": ""
+            },
+            "bias_tensor": {
+                "bias": true,
+                "bias_tensor_name": "cnn.4.bias",
+                "bias_datatype": "int32"
+            },
+            "activation": "relu"
+        },
+        {
+            "name": "cnn3",
+            "type": "ConvBlend",
+            "Blend_type": "qmfnet_v2",
+            "parameters": {
+                "dilation": [
+                    1,
+                    1
+                ],
+                "kernel_size": [
+                    3,
+                    3
+                ],
+                "padding": [
+                    1,
+                    1,
+                    1,
+                    1
+                ],
+                "stride": [
+                    1,
+                    1
+                ]
+            },
+            "input_tensor": {
+                "name": "31",
+                "data_type": "int8",
+                "channels": 32,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "output_tensor": {
+                "name": "43",
+                "data_type": "int8",
+                "channels": 64,
+                "file_location": null,
+                "max_value": 0,
+                "min_value": 0,
+                "offset": 0,
+                "scale_value": 0
+            },
+            "weight_tensor": {
+                "weight_tensor_name": "cnn.6.weight",
+                "weight_datatype": "int8",
+                "weight_file_loc": ""
+            },
+            "bias_tensor": {
+                "bias": true,
+                "bias_tensor_name": "cnn.6.bias",
+                "bias_datatype": "int32"
+            },
+            "jittered" : true,
+            "jitter_index_count" : 64,
+            "output_scale_factor": 2,
+            "activation": "relu"
+        }
+    ]
+}

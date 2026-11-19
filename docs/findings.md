@@ -95,3 +95,32 @@ describes structure and names; it contains no Qualcomm code or weights.
 ### Early divergence notes (ASSUMED until the kernels are read)
 - The int8 convolutions accumulate in int32, which is exact in any order. The requantization step (float scale or power-of-two shift; there is an `invpow2` model variant) decides whether results can be bit-identical.
 - On a real device, ANF may run the precompiled `kernel_bins` or data-graph caches rather than the `.cl` sources. Then "same kernels" means the same source, not the same binary.
+
+## Phase 1 (cont.) + Phase 2: assets recovered (2026-11-19)
+
+### Obfuscation fully reversed — NOT cryptographic (VERIFIED)
+Decompiled the loader at `libanf.so:0x1c3904` (the function that calls `uncompress@plt` at `0x1c3b18`):
+- **key** = the asset's filename stem: `basename(name)` with the last `.ext` removed (e.g. `conv_bias1_jidx0`, `AIFFDebugOverlay`).
+- **stage 1** = repeating XOR: `stored[i] ^ key[i % len(key)]` for `i` in `[0, stored_size)` (loop at `0x1c3a68`, `eor w10,w11,w10`; key index wraps via `csinc`).
+- **stage 2** = `zlib.decompress(stage1)`, expected length = the entry's `size` field.
+- Blob base = start of `.data` (GOT slot `0x1d9ca8` relocates to `.data` va `0x1de408`); table offsets are `.data`-relative.
+- No device binding, no checksum, no standard cipher. The only "protection" is XOR-with-filename + zlib.
+
+`tools/extract_assets.py` reproduces this and **extracts all 1278 assets, each to its exact `size`, 0 failures** (`vendor/assets/`, 17 MB). This replaces the planned qemu dynamic capture for getting the kernels and weights; dynamic tracing is now only needed for the per-frame **dispatch graph** (host logic), not for the assets.
+
+### What the assets are (VERIFIED by inspection)
+- **`spirv/` — 12 Vulkan compute shaders, all `spirv-val` clean (vulkan1.3).** Capabilities are only `Shader`, `StorageImageExtendedFormats`, `ImageQuery`. **No QCOM extensions, no cooperative matrix, no tensor/data-graph ops. These run on RADV unchanged.** They are the glue passes: PrepareInputs, PreprocessFusedV2, PyramidDownscaleFusedV2, UnpackMVV2, Meta/LR pack+unpack, QR pack/unpack, QRBlendV2(/FINT), LRUpscaleAndQRPack, DebugOverlay. LocalSize 16×16 (overlay 32×32); 4–12 descriptor bindings each.
+- **`Kernels_Hawi/` — 38 OpenCL C conv kernels; 37 of 38 use Qualcomm inline assembly** (`#pragma OPENCL EXTENSION cl_qcom_inline_asm`, ~41 `__asm` blocks each: hand-written Adreno QASM MxM inner loops). Only `Conv_MxM.cl`-style scaffolding is portable; the compute is Adreno ISA. **These do NOT run on RADV or rusticl.**
+- **`kernel_bins/{hawi,kaanapali,maili}/` — precompiled Adreno OpenCL binaries** (opaque `data`). Adreno-only.
+- **`graphPipeline/` — ARM data-graph (TOSA/ML) pipeline caches**, e.g. header names `QMFNet_v2_stride...`. Compiled for Adreno's ML path. Adreno-only.
+- **`modelzoo/` — the weights, portable and standard:** int8 conv weights `[OC,IC,KH,KW]`, int32 biases, per-layer `scales.json` (`weights_scales[]`). The net is **QMFNet_v2**.
+
+### Network architecture (VERIFIED from shapes)
+- **SR (`aiff-sr-v2s-prod-7p1`)**: `cnn1 [32,20,3,3]` → `cnn2-0 [32,32,3,3]` → `cnn2-1 [32,32,3,3]` → `cnn3 [64,32,3,3]`, ReLU, then depth-to-space ×2 (D2S) + blend. **64 jitter-phase weight sets** per layer (indices 0..63). An `invpow2` variant exists (inverse-power-of-two requant). `prod-5` is the older data-graph model.
+- **FG (`aiff-frc-{lr,qr}-v2-prod-8`)**: conv0_0..conv5_1 (12 convs) + conv_out + conv_out_flow_mask; LR (low-res flow) and QR branches; `network_io_encodings.json` gives input/flow/mask quant scale+offset.
+- All convolutions are int8×int8→int32 (exact under any summation order). Only **requantization** (int32→int8 via float `scale`, or inverse-pow2 shift) is rounding-sensitive; `scales.json` and the kernel's requant code define it. This is the one place to pin for bit-exactness.
+
+### Consequence for "bit-identical" (the honest statement)
+- The **portable** parts (12 SPIR-V passes, all weights, quant scales, architecture) are exactly Qualcomm's and run on RADV unchanged.
+- The **convolution kernels** (the heavy compute) exist only as Adreno QASM / Adreno OpenCL binaries / Adreno ML caches. **No form runs on RDNA3.** Running "Qualcomm's own conv kernels unchanged" is impossible on this GPU.
+- To run the network on RDNA3 we must re-express conv2d+ReLU+requant+D2S ourselves (as WMMA/dot-product or plain int8 compute), matching Qualcomm's integer arithmetic and requant rounding. This is a kernel re-implementation with identical math, not a retrain or approximation — but it is NOT the vendor's own kernel binary, and every such kernel must be logged in `docs/divergences.md`. This is the Phase 3 decision for Ayo.
