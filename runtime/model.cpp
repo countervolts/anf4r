@@ -28,7 +28,8 @@ bool Model::loadSR(const std::string& md,int jp,std::string& err){
     std::vector<L> defs={{"cnn1",20,32,2},{"cnn2-0",32,32,1},{"cnn2-1",32,32,1},{"cnn3",32,64,1}};
     inChannels=20; layers.clear();
     for(auto& d:defs){
-        std::string dir=md+"/"+d.name+"/"+std::to_string(jp);
+        int useph=(std::string(d.name)=="cnn1"||std::string(d.name)=="cnn3")?jp:0;
+        std::string dir=md+"/"+d.name+"/"+std::to_string(useph);
         ConvLayer c; c.name=d.name; c.ic=d.ic; c.oc=d.oc; c.stride=d.stride; c.pad=1; c.relu=true;
         c.weights=readI8(findFile(dir,"weight",".raw"));
         c.bias=readI32(findFile(dir,"bias",".raw"));
