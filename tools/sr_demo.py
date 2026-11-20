@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline SR demo/validation: static camera + Halton jitter over the SDK hero render, run build/cm/sr_run,
+"""Offline SR demo/validation: static camera + Halton jitter over the test image, run build/cm/sr_run,
 write PNGs and compare against bicubic upscaling of the same LR frames. Usage: sr_demo.py [LRW LRH [frames [model]]]"""
 import sys, subprocess, numpy as np, struct
 from PIL import Image

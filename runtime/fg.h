@@ -7,8 +7,8 @@ namespace anf4r {
 
 struct FgConfig {
     int width = 0, height = 0;                       // FULL resolution (input color/depth/motion + output)
-    std::string spirvDir  = "vendor/assets/spirv";   // vendor AIFF*_cs.bin
-    std::string modelDir  = "vendor/assets/modelzoo";// aiff-frc-{lr,qr}-v2-prod-8
+    std::string spirvDir  = "data/spirv";   // vendor AIFF*_cs.bin
+    std::string modelDir  = "data/modelzoo";// aiff-frc-{lr,qr}-v2-prod-8
     std::string shaderDir = "build";                 // our fg_*.spv
     float discontinuityThresholdSq = 0.0f;           // QRBlendV2FINT push constant (0 = disabled); value used by ANF unknown
     bool invertDepth = false;                        // PreprocessFused push: depth is reverse-Z -> remap (D4)

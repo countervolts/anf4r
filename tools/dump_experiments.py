@@ -47,7 +47,7 @@ elif len(sys.argv) > 2 and sys.argv[2] == 'exposure':
     for e in (8.0, 16.0, 32.0, 64.0): run(f'pre_exposure {e}', pexp=e)
     for e in (4.0, 16.0): run(f'pre_exposure {e} + gamma2.2 decoded', pexp=e, enc='g22')
 elif len(sys.argv) > 2 and sys.argv[2] == 'models':
-    run('invpow2 model (current)'); run('prod-7p1 (float scales)', model='vendor/assets/modelzoo/aiff-sr-v2s-prod-7p1')
+    run('invpow2 model (current)'); run('prod-7p1 (float scales)', model='data/modelzoo/aiff-sr-v2s-prod-7p1')
 elif len(sys.argv) > 2 and sys.argv[2] == 'signs':
     for jx in (1, -1):
         for jy in (1, -1): run(f'jitter x{jx:+d} y{jy:+d} (colour as-is)', jx, jy)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harness fixture (same file layout as m4r's tests/scene_motion.py / scene_fg.py) from the SDK hero render: a constant pan of the
+"""Harness fixture (same file layout as m4r's tests/scene_motion.py / scene_fg.py) from the test image: a constant pan of the
 image, Halton-jittered 2x-downscaled inputs, low-res motion vectors (pixels, previous - current), true in-between frames.
 usage: make_hero_fixture.py <out dir> [frames] [step_x step_y (HR px per frame)]"""
 import os, sys, numpy as np

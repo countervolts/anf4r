@@ -5,7 +5,7 @@
 using namespace anf4r;
 
 int main(int argc, char** argv) {
-    const char* spv = argc > 1 ? argv[1] : "vendor/assets/spirv/AIFFPrepareInputs_cs.bin";
+    const char* spv = argc > 1 ? argv[1] : "data/spirv/AIFFPrepareInputs_cs.bin";
     Context ctx;
     bool val = getenv("VAL") != nullptr;
     if (!ctx.create(val)) { printf("ctx: %s\n", ctx.error.c_str()); return 1; }

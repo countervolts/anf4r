@@ -2,7 +2,7 @@
 # SR checks (run from the repo root, needs build/hero.rgb): deterministic across runs, validation-clean,
 # and temporal accumulation beats bicubic of the same LR frames.
 set -e
-[ -f build/hero.rgb ] || python3 -c "from PIL import Image; open('build/hero.rgb','wb').write(Image.open('vendor/anf-sdk/media/anf-hero.png').convert('RGB').tobytes())"
+[ -f build/hero.rgb ] || python3 tools/testimage.py build/hero.rgb
 python3 tools/sr_demo.py 320 180 12 | tail -4
 cp build/sr_out.bin build/sr_out_a.bin
 ./build/cm/sr_run build/sr_in.bin build/sr_out_b.bin >/dev/null

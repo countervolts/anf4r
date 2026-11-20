@@ -1,36 +1,26 @@
-# anf4r status
+# Status
 
-Updated 2026-11-19. Tags: **VERIFIED** (seen here), **ASSUMED** (inference), **BLOCKED** (needs a device or more work).
-No Adreno device exists, so nothing here is *device-validated*; the validation we have is CPU-reference equality, determinism,
-Vulkan-validation cleanliness and quality metrics against ground truth we can synthesise.
+Tags: **VERIFIED** (checked by a test or measurement here), **ASSUMED** (inference), **OPEN**. No Adreno device was available, so nothing is device-validated; validation is
+CPU-reference equality, determinism, Vulkan validation cleanliness, and quality metrics on synthetic and captured data.
 
-## Working (run `tests/check_fg.sh`, `tests/check_sr.sh`)
-1. **Asset decryptor** `tools/extract_assets.py` — all 1278 assets. VERIFIED
-2. **Runtime** `runtime/{vk,pass}.cpp` — Vulkan context + SPIR-V pass runner; vendor shaders run unchanged on RADV. VERIFIED
-3. **Frame Generation, end to end** `runtime/fg.cpp`, `runtime/fgnet.cpp`, `kernels/fg_*.comp` — Qualcomm's 8 SPIR-V passes unchanged + our LR/QR conv nets with Qualcomm's
-   weights. LR/QR nets bit-exact to a CPU reference (all 14 layers each), deterministic, validation-clean. At zero motion output == input (57 dB); on a known-translation test
-   scene it beats plain averaging. 5.7 ms/frame at 1080p, 10 ms at 1440p (naive kernels). VERIFIED (self-consistency) / ASSUMED (host wiring, see divergences D3, D4)
-4. **Super Resolution, end to end** `runtime/sr.cpp`, `kernels/sr_{pre,post}.comp` — reconstructed from the readable parts of the vendor kernels (divergences D5, D6).
-   Temporal accumulation works: +4.7 dB over bicubic after 16 frames at 640x360, exact alignment, unique jitter-sign optimum. 1.8 ms/frame at 640x360. VERIFIED (self-consistency) / ASSUMED (see D6)
-5. **qemu trace** of `libanf.so` — chip gate and requirements recovered; deadlocks after `CreateTechnique` (no longer needed: the kernels were readable).
+## Working
+- **Runtime**: Vulkan context / adopt a caller's device, SPIR-V pass runner with a descriptor ring, function table for in-process use. VERIFIED
+- **Frame generation**: Qualcomm's eight SPIR-V passes unchanged + our LR/QR convolution networks. Networks bit-exact to an independent CPU reference (all layers), deterministic,
+  validation-clean (`tests/check_fg.sh`). At zero motion output == input. VERIFIED. Host wiring (resolutions, history, constants) reconstructed, ASSUMED where listed in `divergences.md`.
+- **Super resolution**: reconstructed pre/post-processing around the networks; temporal accumulation and alignment verified on synthetic jittered sequences, jitter conventions chosen by measurement
+  on captured game frames (`tests/check_sr.sh`, `tools/dump_experiments.py`). Any scale 1×–3×. VERIFIED (self-consistency) / ASSUMED (see D3–D6).
+- **Matrix-unit kernels**: cooperative-matrix int8 convolutions, bit-identical to the scalar kernels (`ANF_NO_WMMA=1` selects the scalar path). VERIFIED.
+- **OptiScaler (D3D12 via vkd3d-proton)**: SR and FG patches; works in the test harness and has been run in one game. Not broadly tested.
 
-6. **OptiScaler + vkd3d-proton (SR)** — `patches/optiscaler/0001-anf-upscaler.patch` (patch only), `anf4r.dll` (MinGW), `tests/run_optiscaler.sh`; in m4r's D3D12 harness under Proton:
-   26.76 dB vs reference (bilinear 21.89), 2.7 ms/frame at 640x360->1280x720. See docs/optiscaler.md. VERIFIED in the harness; not tried in a game.
+## Performance (RX 7700 XT, GPU timestamps, `build/cm/profile sr|fg W H`)
+| | ms |
+|---|---|
+| SR, input 853×480 / 1280×720 / 1706×960 | 0.47 / 1.19 / 2.2 |
+| FG, 1920×1080 / 2560×1440 | 1.10 / 1.62 |
+Not included: the bicubic resize and copies of the OptiScaler path. Per-stage numbers: see git history of this file / run the profiler.
 
-7. **FG through OptiScaler** — patch 0002 + `anf4r_framegen_*`; harness: 2 presents/frame, real frame restored exactly, 29.5 dB vs true mid-frame. VERIFIED in the harness.
-
-## Not done
-- **Per-frame descriptor sets**: `Pass` rewrites one descriptor set per `record()`; fine for submit-and-wait, must become per-frame ring for in-flight frames.
-- **Performance**: convs are one-thread-per-output scalar loops; dot4/WMMA tiling would be several times faster.
-- **Unknown host constants** (cannot be recovered without the host code or a device): SR jitter->phase mapping, SR `min/max`, QR head `min/max`, FG `discontinuityThresholdSq`, FG/SR depth conventions.
-- Old `conv_int8.comp` / `model_test` (SR v0) are obsolete (see divergences D1/D5).
-
-## Performance (RX 7700 XT, GPU timestamps, `build/cm/profile sr|fg W H`; results bit-identical to the scalar kernels, divergences D7)
-| | before | now |
-|---|---|---|
-| SR, input 853x480 (Ultra Perf @1440p) | 3.5 ms | 0.47 ms |
-| SR, input 1280x720 (Performance @1440p) | 7.7 ms | 1.19 ms |
-| SR, input 1706x960 (Quality @1440p) | 14.6 ms | 2.2 ms |
-| FG 1920x1080 | 5.5 ms | 1.10 ms |
-| FG 2560x1440 | 9.9 ms | 1.62 ms |
-Left: SR pre/post (about 60% of SR now, bandwidth-bound), FG vendor shaders (0.45 ms @1440p), launch-latency of the 28 small dependent FG layers.
+## Open
+- Host constants that cannot be recovered without a device: SR jitter→weight-set mapping (chosen by measurement), SR/QR-head clamps, the FG discontinuity threshold, depth conventions.
+- SR quality in motion on real game content is acceptable at best; an optional motion-aware output stabiliser exists but is off (D8).
+- FG: layer fusion could save about 0.25 ms; the vendor shaders (about 0.5 ms at 1440p) cannot be changed.
+- Only RDNA3 (gfx1101) was tested; the scalar fallback should run on any Vulkan 1.3 device with int8 storage but was not tested elsewhere.

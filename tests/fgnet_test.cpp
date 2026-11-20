@@ -51,7 +51,7 @@ static int runNet(Context& ctx, bool lr, int W, int H, const char* root) {
 }
 
 int main(int argc, char** argv) {
-    const char* root = argc > 1 ? argv[1] : "vendor/assets/modelzoo";
+    const char* root = argc > 1 ? argv[1] : "data/modelzoo";
     Context ctx; if (!ctx.create(getenv("VAL") != nullptr)) { printf("ctx: %s\n", ctx.error.c_str()); return 1; }
     int f = 0; f += runNet(ctx, true, 70, 50, root); f += runNet(ctx, false, 66, 38, root);
     printf(f ? "FGNET FAIL (%d)\n" : "FGNET OK: GPU == CPU reference, deterministic\n", f); ctx.destroy(); return f != 0;

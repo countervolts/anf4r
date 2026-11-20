@@ -1,53 +1,54 @@
-# anf4r — Qualcomm Adreno Neural Fusion on Radeon (RDNA3)
+# anf4r — Adreno Neural Fusion super resolution and frame generation on AMD RDNA3
 
-Runs Qualcomm's **Adreno™ Neural Fusion** (ANF) networks on AMD RDNA3 under Linux. Qualcomm's real quantized
-weights and their Vulkan SPIR-V data-path shaders are used **unchanged**; the convolutions — which Qualcomm ships
-only as Adreno machine code — are re-implemented as int8 SPIR-V with identical integer arithmetic.
+anf4r runs the networks of Qualcomm's **Adreno™ Neural Fusion (ANF)** — a 2× temporal super-resolution network and an
+optical-flow frame-generation pair — on AMD RDNA3 GPUs through Vulkan, and plugs them into games via
+[OptiScaler](https://github.com/optiscaler/OptiScaler) (D3D12 through vkd3d-proton / Proton).
 
-Sibling projects: [d4r](https://github.com/countervolts/d4r) (DLSS), [m4r](https://github.com/countervolts/m4r)
-(MetalFX), [x4r](https://github.com/countervolts/x4r) (XeSS). **Private, research only. Not affiliated with Qualcomm.**
+It is an independent research project. **Not affiliated with or endorsed by Qualcomm.** It contains no Qualcomm code, weights or binaries:
+you supply the ANF model data yourself, see [NOTICE.md](NOTICE.md) before using or contributing.
 
-## What works today (verified on an RX 7700 XT, RADV / Mesa 26.2)
+## Status (RX 7700 XT, RADV / Mesa 26.2; see [docs/STATUS.md](docs/STATUS.md))
 
 | | |
 |---|---|
-| Asset extraction | All 1278 embedded ANF assets (SPIR-V, OpenCL, weights, pipeline caches) extracted from `libanf.so`. The "encryption" is XOR-with-filename + zlib; `tools/extract_assets.py` reproduces it exactly. |
-| Vendor SPIR-V on RADV | Qualcomm's own `AIFF*_cs` compute shaders build and dispatch on RDNA3, validation-clean (`tests/smoke_pass.cpp`). |
-| int8 convolution | Re-implemented conv (`kernels/conv_int8.comp`) is **bit-exact** to an independent CPU reference on Qualcomm's real weights, all SR layers (`tests/conv_test.cpp`). |
-| Full SR network | QMFNet V2 (cnn1→cnn2-0→cnn2-1→cnn3) runs end-to-end on the GPU, **bit-exact to CPU and deterministic** across runs and jitter phases (`tests/model_test.cpp`). |
+| Frame generation | Runs end to end. Qualcomm's SPIR-V passes unchanged plus our LR/QR convolution networks. Networks are **bit-exact** to an independent CPU reference and deterministic. 1.1 ms at 1080p, 1.6 ms at 1440p. |
+| Super resolution | Runs end to end (reconstructed pre/post-processing around the networks). Temporal accumulation verified on synthetic sequences; 1.2 ms at 1280×720 input. Any scale 1×–3× (network runs at its native 2×, bicubic resize). |
+| Performance kernels | int8 convolutions on the RDNA3 matrix units (`VK_KHR_cooperative_matrix`), **bit-identical** to the scalar kernels (7.7→1.2 ms SR, 9.9→1.6 ms FG). Scalar fallback included. |
+| OptiScaler | `patches/optiscaler/` adds `Dx12Upscaler=anf` and `FGOutput=anf`; works in the D3D12 test harness under Proton and has been tried in one game. |
+| Not device-validated | No Adreno device was available. Reconstructed host-side constants are listed in [docs/divergences.md](docs/divergences.md); quality in real games is not on par with a verified port and some settings were tuned by eye. |
 
-See [docs/STATUS.md](docs/STATUS.md) for exactly what is verified, reconstructed, and blocked, and
-[docs/findings.md](docs/findings.md) / [docs/divergences.md](docs/divergences.md) for the detail.
+## How it works
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): network topology, tensor layouts, the quantisation domain, each pipeline stage, and
+which parts are Qualcomm's unchanged shaders versus our reconstructions.
 
-## The honest caveat
-
-ANF's convolutions and SR input/output packing exist in the SDK only as **Adreno machine code** (QASM inline asm,
-precompiled Adreno OpenCL, or ARM data-graph). There is **no Snapdragon device** here for ground truth, so:
-- The conv network is validated by *determinism* and *bit-exact agreement with an independent CPU reference* — not
-  against a real Adreno run.
-- SR's 20-channel input packing and output depth-to-space/blend are Adreno-asm only; a faithful reconstruction
-  cannot be validated without a device. The network core is proven; the full in-game SR pipeline is **not** yet a
-  drop-in replacement. Frame Generation, whose glue is portable vendor SPIR-V, is the more faithful target.
-
-## Build & test
+## Build
+Requirements: a C++17 compiler, CMake ≥ 3.20, Ninja, Vulkan headers/loader, `glslc` (shaderc), Python 3 with numpy and Pillow.
+Windows DLL for OptiScaler: MinGW-w64; OptiScaler itself: clang-cl + xwin (see [docs/optiscaler.md](docs/optiscaler.md)).
 
 ```bash
-cmake -S . -B build/cm -G Ninja -DCMAKE_BUILD_TYPE=Release && ninja -C build/cm
-glslc --target-env=vulkan1.3 -O kernels/conv_int8.comp -o build/conv_int8.spv
-python3 tools/extract_assets.py vendor/anf-sdk/lib/arm64-v8a/libanf.so vendor/assets   # one-time
-./build/cm/smoke_pass        # vendor SPIR-V runs on RADV
-./build/cm/conv_test         # conv bit-exact vs CPU
-./build/cm/model_test        # full SR net bit-exact + deterministic
-python3 tools/prepare_sr.py --out build/plans/sr-2560x1440-1280x720 --in 1280x720
+cmake -S . -B build/cm -G Ninja -DCMAKE_BUILD_TYPE=Release && ninja -C build/cm        # kernels -> build/*.spv, tests, tools
+scripts/setup_vulkan_headers.sh && cmake -S . -B build/win -G Ninja -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/mingw-w64.cmake \
+    -DCMAKE_BUILD_TYPE=Release && ninja -C build/win                                    # build/win/anf4r.dll
 ```
 
-## Layout
-- `runtime/` — Vulkan context, SPIR-V pass runner, QMFNet model runner, C API (`anf4r.h`).
-- `kernels/` — our SPIR-V (conv; SR/FG glue uses Qualcomm's unchanged).
-- `tools/` — `extract_assets.py` (decryptor), `spv_reflect.py`, `prepare_sr.py`.
-- `tests/` — smoke, conv, model.
-- `vendor/` — Qualcomm SDK + extracted assets (private; not for redistribution).
+## Model data
+anf4r needs the ANF model data from **your own copy** of the ANF SDK (`libanf.so`): weights, quantisation scales and the frame-generation SPIR-V passes,
+laid out as `modelzoo/`, `spirv/` (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#data-layout)). `scripts/install_anf.py` assembles the folder next to a game.
+This repository does not provide the data and does not provide a way to obtain it; see [NOTICE.md](NOTICE.md).
 
-## License
-GPL-3.0-only for anf4r's own code. Qualcomm's `libanf.so`, the extracted assets and anything derived from them are
-**not** covered and must not be redistributed.
+## Test
+```bash
+tests/check_fg.sh          # FG nets == CPU reference, pipeline deterministic + validation-clean   (needs the model data)
+tests/check_sr.sh          # SR deterministic + validation-clean on a synthetic jittered sequence  (needs the model data)
+build/cm/profile sr 1280 720 ; build/cm/profile fg 2560 1440     # per-pass GPU timing
+tests/run_optiscaler.sh ...                                      # OptiScaler + D3D12 harness under Proton (needs m4r's harness)
+```
+Without a real image the tests use a procedural one (`tools/testimage.py`; `HERO_IMAGE=<file>` to use your own).
+
+## Layout
+`runtime/` Vulkan context, pass runner, SR/FG pipelines, C API (`anf4r.h`) · `kernels/` our GLSL (matrix-unit convs, SR pre/post, heads, resize, stabiliser) ·
+`patches/optiscaler/` OptiScaler patches (the OptiScaler tree itself is not included) · `tools/` profiler, offline runner, capture analysis · `tests/` · `docs/`.
+
+## Credits and license
+GPL-3.0-only ([LICENSE](LICENSE)). The OptiScaler integration follows [m4r](https://github.com/countervolts/m4r)'s approach and derives its patches from it; OptiScaler is GPL-3.0.
+Qualcomm, Adreno and Snapdragon are trademarks of Qualcomm Incorporated.

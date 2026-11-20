@@ -12,7 +12,7 @@ git clone https://github.com/optiscaler/OptiScaler external/optiscaler && git -C
 git -C external/optiscaler apply $PWD/patches/optiscaler/0001-anf-upscaler.patch $PWD/optiscaler/clang-cl.patch
 cmake -S optiscaler -B build/opti -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/clang-cl-xwin.cmake && ninja -C build/opti
 cmake -S . -B build/win -G Ninja -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/mingw-w64.cmake -DCMAKE_BUILD_TYPE=Release && ninja -C build/win   # anf4r.dll
-python3 scripts/install_anf.py --out /path/to/game/dir          # anf4r\\anf4r.dll + data (shaders, vendor SPIR-V, weights) from your own libanf.so
+python3 scripts/install_anf.py --out /path/to/game/dir          # anf4r\\anf4r.dll + data (shaders, the FG SPIR-V, weights) from your own ANF model data
 tests/run_optiscaler.sh $PROTON_DIR build/opti/OptiScaler.dll <fixture dir> 8 640 360 1280 720     # uses m4r's D3D12 harness + fixtures
 ```
 (Case-insensitive includes need the symlinks from `optiscaler/casefix.py` on Linux.)

@@ -1,4 +1,9 @@
-# anf4r findings
+# anf4r research log (historical)
+
+Chronological notes from the reverse-engineering phase. **Later sections supersede earlier ones** (several early conclusions, e.g. that SR has no portable
+glue, were wrong and are corrected further down). For the current understanding read `ARCHITECTURE.md` and `divergences.md`.
+This log describes the analysis of Qualcomm's binary and is not part of the default open-source export (see `NOTICE.md`).
+
 
 Tags: **VERIFIED** = seen directly in this repo's work; **SOURCED** = from a cited document; **ASSUMED** = inference, not yet checked.
 Vendor-derived data (binary, extracted tables, strings, traces) lives only in `vendor/` (gitignored). This file

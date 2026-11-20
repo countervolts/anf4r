@@ -6,7 +6,7 @@ namespace anf4r {
 
 struct SrConfig {
     int lrW = 0, lrH = 0;                           // input (render) size; output is 2x
-    std::string modelDir  = "vendor/assets/modelzoo/aiff-sr-v2s-prod-7p1-invpow2";
+    std::string modelDir  = "data/modelzoo/aiff-sr-v2s-prod-7p1-invpow2";
     std::string shaderDir = "build";
     float preExposure = 1.0f;                       // tonemap constant (the inverse in sr_post assumes 1.0)
     bool invertDepth = false;                       // true: input depth is forward-Z (smaller = nearer)
