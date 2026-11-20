@@ -117,3 +117,6 @@ both model variants: all worse), and the live output equals the offline output (
 - `sr_stab.comp` (`stabilize = beta` in `config.txt`, 0 = off): a second history of ANF's tonemapped output, `s = mix(cur, clamp(reproject(s_prev), min3x3(cur), max3x3(cur)), beta)`, then the inverse tonemap. ANF's own recurrent
   history is not touched, so with beta = 0 the output is exactly the reconstructed vendor pipeline (verified bit-identical). beta 0.75, e=4: flicker 2.5e-3, leak 0.15, sharpness 24.8e-3 vs plain TAAU 11.8e-3.
   Cost ~0.2 ms net at 1280x720 input. Installed for Ghost of Tsushima with `stabilize = 0.75`, `pre_exposure = 4` in `anf4r/data/config.txt`.
+Field result (Ghost of Tsushima, Ultra Performance): with `pre_exposure = 4` alone (`stabilize = 0`) the shimmer is gone and motion is acceptable; with `stabilize = 0.75` the shimmer was gone but
+motion looked bad (temporal history without motion-aware fading). Current GoT install: `stabilize = 0`, `pre_exposure = 4`. The stabiliser stays available but is off; making it fade with local motion /
+history disagreement would be the next step if it is wanted again.
