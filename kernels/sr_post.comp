@@ -1,0 +1,42 @@
+#version 450
+// anf4r SR postprocess (reconstruction of postprocess_qmfnet_v2_uint8.cl + the inverse tonemap of the fused
+// Conv2D_*_Blend_D2S kernels; see docs/divergences.md D6). Per HR pixel: DepthToSpaceDCR(4) read of the net output,
+// offset-warped candidate sample of the LR colour, alpha blend with the warped previous HR frame.
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(constant_id = 0) const int LR_W = 1;
+layout(constant_id = 1) const int LR_H = 1;
+layout(constant_id = 2) const int NET_W = 1;      // width of the net output tensor (= ceil(LR_W/2))
+layout(constant_id = 3) const float TM_MAX = 0.9995; // upper clamp of the tonemapped value before the inverse (ASSUMED)
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+layout(set = 0, binding = 0) uniform texture2D texColorLR;     // tonemapped LR colour from preprocess
+layout(set = 0, binding = 1) uniform texture2D texPrevWarped;  // warped previous HR colour from preprocess
+layout(std430, binding = 2) readonly buffer NetOut { int8_t v[]; } net;   // cnn3 output, int8 = uint8-128, 64 ch / net pixel
+layout(set = 0, binding = 3) uniform sampler sampEdge;         // linear, clamp-to-edge
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D imgHist;    // tonemapped HR (next frame's prev colour)
+layout(set = 0, binding = 5, r32f) uniform writeonly image2D imgFeat;       // HR feature (next frame's prev feature)
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D imgOut;     // final linear HDR output
+layout(push_constant) uniform PC { vec2 jitter; int hrW; int hrH; } pc;     // quantised jitter offsets (LR px)
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.hrW || p.y >= pc.hrH) return;
+    int sx = p.x % 4, sy = p.y % 4, spatial = sy * 4 + sx;
+    int base = ((p.y / 4) * NET_W + (p.x / 4)) * 64 + spatial * 4;
+    vec4 raw = vec4(float(int(net.v[base]) + 128), float(int(net.v[base + 1]) + 128), float(int(net.v[base + 2]) + 128), float(int(net.v[base + 3]) + 128)) / 255.0;
+    vec2 anchor = vec2(float(p.x) - 0.5, float(p.y) - 0.5) / 2.0;
+    anchor.x -= pc.jitter.x; anchor.y += pc.jitter.y;
+    anchor = max(floor(anchor), vec2(0.0));
+    vec2 grid = anchor + raw.xy;
+    vec3 cand = textureLod(sampler2D(texColorLR, sampEdge), (grid + 0.5) / vec2(float(LR_W), float(LR_H)), 0.0).rgb;
+    vec3 past = texelFetch(texPrevWarped, p, 0).rgb;
+    float a = raw.z;
+    vec3 t = a * past + (1.0 - a) * cand;
+    imageStore(imgHist, p, vec4(t, 1.0));
+    imageStore(imgFeat, p, vec4(raw.w, 0.0, 0.0, 0.0));
+    t = clamp(t, 0.0, TM_MAX);
+    float m = max(t.x, max(t.y, t.z));
+    vec3 lin = t / (1.0 - m); lin *= lin;                        // inverse of t = sqrt(c)/(max(sqrt(c)) + 1)
+    imageStore(imgOut, p, vec4(lin, 1.0));
+}

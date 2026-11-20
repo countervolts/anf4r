@@ -16,6 +16,7 @@ layout(constant_id = 6) const int OUT_H = 1;
 layout(constant_id = 7) const int OUT_MODE = 0;
 layout(constant_id = 8) const int LO = 0;
 layout(constant_id = 9) const int HI = 127;
+layout(constant_id = 11) const int OUT_OFF = 0;   // added after rounding/clamping (SR: LO=0,HI=255,OUT_OFF=-128 -> int8 = uint8-128)
 layout(constant_id = 10) const int PADV = 0;   // value of out-of-bounds input taps: 0 for the first layer (ZERO_PADDING), -128 (0x80) elsewhere
 
 layout(std430, binding = 0) readonly buffer InBuf { uint v[]; } inp;       // int8 words
@@ -77,7 +78,7 @@ void main() {
         if (z >= OC) return;
         precise float f = fma(scale.v[z], float(convAcc(ox, oy, z)), biasf.v[z]);
         f = min(max(f, float(LO)), float(HI));
-        outb.v[(oy * OUT_W + ox) * OC + z] = int8_t(int(rndaz(f)));
+        outb.v[(oy * OUT_W + ox) * OC + z] = int8_t(int(rndaz(f)) + OUT_OFF);
     } else {
         int c0 = z * 2;
         if (c0 >= OC) return;

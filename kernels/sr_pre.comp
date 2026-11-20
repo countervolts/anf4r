@@ -1,0 +1,55 @@
+#version 450
+// anf4r SR preprocess (reconstruction of Kernels_Hawi/preprocess_qmfnet_v2.cl; see docs/divergences.md D6).
+// Per LR pixel: unpack+tonemap colour, 3x3 max-depth MV pick, warp previous HR colour/feature (2x2 HR samples),
+// pack the 20-channel int8 model input (uint8-128 domain): [R G B depth][feature x4][prev R x4][prev G x4][prev B x4].
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(constant_id = 0) const int LR_W = 1;
+layout(constant_id = 1) const int LR_H = 1;
+layout(constant_id = 2) const int DEPTH_INVERT = 0;   // 1: forward-Z input (nearer = smaller) -> use 1-d so that max == nearest
+
+layout(set = 0, binding = 0) uniform texture2D texColor;       // LR linear HDR colour (any float format; R11G11B10 decoded by HW)
+layout(set = 0, binding = 1) uniform texture2D texDepth;       // LR depth, fp32, reverse-Z (larger = nearer)
+layout(set = 0, binding = 2) uniform texture2D texMV;          // LR motion, rg fp16/32, uv units, no jitter
+layout(set = 0, binding = 3) uniform texture2D texPrevColor;   // HR tonemapped history (RGBA16F)
+layout(set = 0, binding = 4) uniform texture2D texPrevFeat;    // HR feature history (R32F)
+layout(set = 0, binding = 5) uniform sampler sampBorder;       // linear, clamp-to-border (transparent black) == CLK_ADDRESS_CLAMP
+layout(std430, binding = 6) writeonly buffer ModelIn { uint v[]; } mi;   // 5 words / pixel (20 B)
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D imgColorLR;   // unpacked (tonemapped) LR colour
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D imgPrevWarped; // warped previous HR colour (HR size)
+layout(push_constant) uniform PC { float preExposure; } pc;
+
+float rndaz(float x) { return x >= 0.0 ? floor(x + 0.5) : ceil(x - 0.5); }
+uint q8(float v) { return uint(clamp(rndaz(v * 255.0), 0.0, 255.0)) ^ 128u; }   // uint8 - 128 stored as int8 byte
+vec3 tonemap(vec3 c) { vec3 s = sqrt(max(c, 0.0)); float m = max(s.x, max(s.y, s.z)); return s * (1.0 / (m + pc.preExposure)); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= LR_W || p.y >= LR_H) return;
+    vec3 col = tonemap(texelFetch(texColor, p, 0).rgb);
+    float dC = texelFetch(texDepth, p, 0).r; if (DEPTH_INVERT != 0) dC = 1.0 - dC;
+    // 3x3 max depth (strict >, row-major scan), out-of-frame = -1 (matches mm_find_max_depth_index)
+    float best = -2.0; vec2 bestMV = vec2(0.0); bool first = true;
+    for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+        ivec2 q = p + ivec2(dx, dy); float d = -1.0; vec2 mv = vec2(0.0);
+        if (q.x >= 0 && q.y >= 0 && q.x < LR_W && q.y < LR_H) { d = texelFetch(texDepth, q, 0).r; if (DEPTH_INVERT != 0) d = 1.0 - d; mv = texelFetch(texMV, q, 0).rg; }
+        if (first || d > best) { best = d; bestMV = mv; first = false; }
+    }
+    vec2 fm = bestMV * vec2(float(LR_W) * -1.0, float(LR_H) * 1.0);   // MV_SCALE_X = -1, MV_SCALE_Y = +1
+    vec2 uv0 = vec2(2.0 * float(p.x) + 2.0 * fm.x + 0.5, 2.0 * float(p.y) - 2.0 * fm.y + 0.5);
+    vec2 hrSize = vec2(2.0 * float(LR_W), 2.0 * float(LR_H));
+    vec4 S[4]; float F[4];
+    for (int k = 0; k < 4; ++k) {
+        vec2 uv = uv0 + vec2(float(k & 1), float(k >> 1));
+        S[k] = textureLod(sampler2D(texPrevColor, sampBorder), uv / hrSize, 0.0);
+        F[k] = textureLod(sampler2D(texPrevFeat, sampBorder), uv / hrSize, 0.0).r;
+        imageStore(imgPrevWarped, ivec2(2 * p.x + (k & 1), 2 * p.y + (k >> 1)), vec4(S[k].rgb, 0.0));
+    }
+    imageStore(imgColorLR, p, vec4(col, 0.0));
+    uint base = uint(p.y * LR_W + p.x) * 5u;
+    mi.v[base + 0u] = q8(col.r) | (q8(col.g) << 8) | (q8(col.b) << 16) | (q8(dC) << 24);
+    mi.v[base + 1u] = q8(F[0]) | (q8(F[1]) << 8) | (q8(F[2]) << 16) | (q8(F[3]) << 24);
+    mi.v[base + 2u] = q8(S[0].r) | (q8(S[1].r) << 8) | (q8(S[2].r) << 16) | (q8(S[3].r) << 24);
+    mi.v[base + 3u] = q8(S[0].g) | (q8(S[1].g) << 8) | (q8(S[2].g) << 16) | (q8(S[3].g) << 24);
+    mi.v[base + 4u] = q8(S[0].b) | (q8(S[1].b) << 8) | (q8(S[2].b) << 16) | (q8(S[3].b) << 24);
+}

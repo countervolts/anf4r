@@ -74,3 +74,27 @@ The vendor SPIR-V is unchanged. The *host* logic that ANF runs around it is ours
   per LR texel: a scene-cut detector) or when > 20% of LR texels have |MV| > 32 px. Fast motion therefore bypasses FG by design.
 **Validation:** `tests/fg_test.cpp` on the SDK's own hero render translated by a known sub-pixel vector: deterministic across reset+replay; identity at zero motion
 (57 dB); at (2, 0.7) px/frame FG is 31.7 dB vs the analytic mid-frame against 31.5 dB for plain averaging and 27.2 dB for repeat-current. NOT device-validated.
+
+## D5 — SR convolutions (`runtime/sr.cpp` driving `kernels/fg_conv_i8.comp`)  [reconstructed; supersedes D1 for SR]
+The SR convs now use the FG conv kernel with the semantics verified in D2: `-128` activation domain (hidden layers carry the `-128` output zero-point in the
+folded bias: residual `(bias - 128*sum(w))*ws` = -123 / -106 for cnn2-0 / cnn2-1, vs -128 in FG), pad `0x80` (verified in `Conv2D_20_3_3_32_Jittered_Relu_int8.cl`),
+clamp `[-128,127]`, round-half-away. `cnn3` is plain signed int8 (residual -28: no output zero-point); the postprocess adds 128 (`raw = q + 128`).
+SR scales files only carry `weights_scales` (`ias = oas = 1`), so `scale = ws`, `bias_f = bias_i32*ws`. The INV_POW2 vendor path is an integer `mad.s24` then `>>16`
+(floor) with a host-built bias; we model it as round-half-up on the exact value (ASSUMED: the host adds the `0x8000` rounding term). `conv_int8.comp`/`model_test` (D1) are
+**obsolete** and kept only for history (they used truncation and `ReLU=max(f,0)`, both wrong).
+
+## D6 — SR pre/post-processing (`kernels/sr_pre.comp`, `kernels/sr_post.comp`)  [reconstructed from readable asm]
+Source: `preprocess_qmfnet_v2.cl` (+ `_v2_1`), `postprocess_qmfnet_v2_uint8.cl`, and the inverse-tonemap block of `Conv2D_32_3_3_64_Jittered_Relu_Blend_D2S_qmfnet_v2_int8.cl`.
+VERIFIED from those sources:
+- Model input, 20 ch, `MODEL_INPUT_STRIDE_BYTES = 20` variant: words = `[R,G,B,depth]`, `[feature x4]`, `[prev R x4]`, `[prev G x4]`, `[prev B x4]` (the 4 = the 2x2 HR pixels of an LR pixel), each
+  `clamp(rndaz(v*255),0,255)` stored as `u8 - 128` (non-`UINT8_PACKING`); pad words `0x80808080`.
+- Colour: `s = sqrt(c)`, `t = s / (max(s) + pre_exposure)` (reversible tonemap); depth: 3x3 *max* (reverse-Z, strict `>`, out-of-frame -1) selects the MV; `FINAL_MV_INPUT` so the MV is used
+  directly: `fm = mv * (W*-1, H*+1)`, previous-frame samples at `2*uv + 2*fm + {0.5,1.5}` (bilinear, `CLK_ADDRESS_CLAMP` = border 0) from the HR tonemapped history and the HR feature history.
+- Net output: `DepthToSpaceDCR(4)`: `raw[(y/4, x/4)][((y%4)*4+x%4)*4 + {0,1,2,3}] = {offset_x, offset_y, alpha, feature}`, each `/255`; candidate = bilinear LR colour at
+  `floor((p-0.5)/2 - (jx,-jy)) + offset`; `out = alpha*warped_prev + (1-alpha)*candidate` (tonemapped space); inverse tonemap `(t/(1-max t))^2`.
+ASSUMED / ours: `pre_exposure = 1` (the vendor's inverse implies 1); upper clamp of `t` before the inverse = 0.9995 (the vendor passes `min/max` as kernel args); jitter quantisation
+(8x8 phase grid, `index = iy*8+ix`, quantised offset = cell centre) — the phase table is not recoverable without the host code; depth convention reverse-Z (option `invertDepth`);
+fp32 arithmetic where the vendor uses fp16 (`mad.f16`) in the blend. History is zero on reset. Not device-validated.
+**Validation (no ground truth exists):** `tools/sr_demo.py` renders a static-camera Halton-jittered sequence from the SDK hero image and compares with the HR source:
+alignment is exact (best global shift 0,0), **jitter sign convention (x right, y up) is the unique best of the four** (31.4 vs 26-30 dB), PSNR rises monotonically with frames
+(30.0 -> 31.5 dB at 320x180; 32.0 -> 33.2 dB at 640x360 vs 28.4 dB for bicubic of the same LR frames). Deterministic, validation-clean (`tests/check_sr.sh`).

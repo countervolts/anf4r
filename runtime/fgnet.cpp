@@ -10,13 +10,13 @@
 namespace anf4r {
 
 // ---------------- file helpers ----------------
-static std::vector<uint8_t> readAll(const std::string& p) {
+std::vector<uint8_t> readAllBytes(const std::string& p) {
     std::ifstream f(p, std::ios::binary | std::ios::ate); if (!f) return {};
     size_t n = f.tellg(); f.seekg(0); std::vector<uint8_t> v(n); f.read((char*)v.data(), n); return v;
 }
-static std::string readText(const std::string& p) { auto v = readAll(p); return std::string(v.begin(), v.end()); }
+std::string readTextFile(const std::string& p) { auto v = readAllBytes(p); return std::string(v.begin(), v.end()); }
 // value of a JSON key that is either a number or a flat array of numbers
-static std::vector<float> jsonNums(const std::string& j, const char* key) {
+std::vector<float> jsonNumbers(const std::string& j, const char* key) {
     std::vector<float> r; auto k = j.find(std::string("\"") + key + "\""); if (k == std::string::npos) return r;
     k = j.find(':', k) + 1; while (k < j.size() && j[k] == ' ') ++k;
     if (j[k] == '[') { auto e = j.find(']', k); std::stringstream ss(j.substr(k + 1, e - k - 1)); std::string t;
@@ -48,7 +48,7 @@ uint16_t floatToHalf(float f) {   // RTE
 // ---------------- model loading ----------------
 bool FgNetModel::load(const std::string& dir, bool lr, std::string& err) {
     isLR = lr; hidden.clear();
-    std::string enc_ = readText(dir + "/network_io_encodings.json");
+    std::string enc_ = readTextFile(dir + "/network_io_encodings.json");
     if (enc_.empty()) { err = "no network_io_encodings.json"; return false; }
     enc.inScale = jsonObjNum(enc_, "input", "scale"); enc.inOffset = jsonObjNum(enc_, "input", "offset");
     enc.flowScale = jsonObjNum(enc_, "flow", "scale"); enc.flowOffset = jsonObjNum(enc_, "flow", "offset");
@@ -62,9 +62,9 @@ bool FgNetModel::load(const std::string& dir, bool lr, std::string& err) {
     auto loadLayer = [&](const D& d, bool fp16w, FgLayer& L) -> bool {
         std::string ld = dir + "/" + d.n + "/jitter0";
         L.name = d.n; L.ic = d.ic; L.oc = d.oc; L.stride = d.s;
-        auto w = readAll(ld + "/weights.raw"), b = readAll(ld + "/bias.raw");
-        std::string sj = readText(ld + "/scales.json");
-        auto ws = jsonNums(sj, "weights_scales"), ias = jsonNums(sj, "input_activation_scale"), oas = jsonNums(sj, "output_activation_scale");
+        auto w = readAllBytes(ld + "/weights.raw"), b = readAllBytes(ld + "/bias.raw");
+        std::string sj = readTextFile(ld + "/scales.json");
+        auto ws = jsonNumbers(sj, "weights_scales"), ias = jsonNumbers(sj, "input_activation_scale"), oas = jsonNumbers(sj, "output_activation_scale");
         size_t n = (size_t)d.oc * d.ic * 9;
         if (fp16w) {
             if (w.size() != n * 2 || b.size() != (size_t)d.oc * 2) { err = "fp16 head sizes " + ld; return false; }

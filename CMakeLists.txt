@@ -16,12 +16,15 @@ target_sources(anf4r_rt PRIVATE runtime/fgnet.cpp)
 target_sources(anf4r_rt PRIVATE runtime/fg.cpp)
 add_executable(fg_test tests/fg_test.cpp)
 target_link_libraries(fg_test PRIVATE anf4r_rt)
+target_sources(anf4r_rt PRIVATE runtime/sr.cpp)
+add_executable(sr_run tools/sr_run.cpp)
+target_link_libraries(sr_run PRIVATE anf4r_rt)
 add_executable(fgnet_test tests/fgnet_test.cpp)
 target_link_libraries(fgnet_test PRIVATE anf4r_rt)
 
 # Compile our own compute kernels to SPIR-V (vendor shaders are used as-is from vendor/assets/spirv).
 find_program(GLSLC glslc REQUIRED)
-set(ANF_KERNELS conv_int8 fg_conv_i8 fg_head_lr fg_head_qr)
+set(ANF_KERNELS conv_int8 fg_conv_i8 fg_head_lr fg_head_qr sr_pre sr_post)
 set(ANF_SPV "")
 foreach(k ${ANF_KERNELS})
   add_custom_command(OUTPUT ${CMAKE_SOURCE_DIR}/build/${k}.spv

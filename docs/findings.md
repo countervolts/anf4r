@@ -218,3 +218,10 @@ Resolution chain and tensor layouts, all VERIFIED from the cross-compiled vendor
 - ANF **requant semantics are readable** in the OpenCL sources: `fma(scale,acc,bias)`, clamp, `rndaz`; INV_POW2 = `mad.s24 >> 16`. Activation domain is `uint8-128` (see divergences D2).
 - Other FG kernels in `Kernels_Hawi`: `Conv2D_64_3_3_20_Relu_mixed.cl` (LR head, fp16), `Conv2D_96_3_3_64_Relu_int8.cl` (LR conv_out), `Conv2D_32_3_3_20_Relu_int8.cl` (QR head).
 - Result: FG runs end to end on RDNA3 with Qualcomm's real weights; see `tests/check_fg.sh`.
+
+## SR end-to-end (2026-11-19)
+- The "Adreno asm only" SR input packing was wrong: the `inline asm` in `preprocess_qmfnet_v2.cl` is mostly register moves/conversions and is decodable by hand (see divergences D6).
+  The postprocess kernel is plain OpenCL C. Only the host logic (jitter -> phase index/offsets, `min/max` clamps, `pre_exposure`) remains unknown.
+- The activation/quantisation domain (`uint8 - 128`, ReLU = clamp at -128, pad 0x80) is the same for SR and FG and was recovered statistically from the weights
+  (`corr(bias, sum w) ~ 0.97-1.0`, slope ~128-150) and confirmed by the kernels' `0x80808080` padding constant.
+- SR working on RDNA3: `tools/sr_demo.py`, `build/cm/sr_run`; 1.8 ms/frame at 640x360 -> 1280x720 (naive conv kernels, includes submit+wait).

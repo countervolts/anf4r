@@ -2,6 +2,7 @@
 // Checks: runs validation-clean, deterministic across resets, and interpolation quality vs the analytic mid frame.
 #include "../runtime/fg.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -102,6 +103,8 @@ int main(int argc, char** argv) {
           printf("  LR conv_out (fp16 real): n=%zu nonzero %.1f%% mean %.5f max %.4f\n", n, 100.0 * nz / n, sm / n, mx); }
         for (size_t i = 0; i + 1 < 13; ++i) { size_t n = fg.lrNet.activation(i).size; auto a = rb2(fg.lrNet.activation(i), n); char nm[16]; snprintf(nm, 16, "LR act%zu", i); dump(nm, a, 0); }
     }
+    if (getenv("BENCH")) { auto t0 = std::chrono::steady_clock::now(); int N = 30; for (int i = 0; i < N; ++i) { VkCommandBuffer cb = ctx.begin(); fg.record(ctx, cb, color, depth, motion, out); ctx.submit(cb); }
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / N; printf("BENCH: %.2f ms/frame (record+submit+wait, %dx%d)\n", ms, W, H); }
     bool det = outs[0] == outs[1]; printf("deterministic across reset+replay: %s\n", det ? "yes" : "NO");
     system("mkdir -p build/fg_out");
     for (int k = 1; k < 4; ++k) {

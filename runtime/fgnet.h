@@ -6,6 +6,10 @@
 
 namespace anf4r {
 
+std::vector<uint8_t> readAllBytes(const std::string& path);
+std::string readTextFile(const std::string& path);
+std::vector<float> jsonNumbers(const std::string& json, const char* key);   // number or flat array under "key"
+
 struct FgLayer {
     std::string name;
     int ic = 0, oc = 0, stride = 1;
