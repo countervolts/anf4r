@@ -5,6 +5,8 @@
 
 namespace anf4r {
 
+void (*g_passHook)(VkCommandBuffer, const Pass*, bool) = nullptr;
+
 std::vector<uint32_t> readSpirv(const std::string& path) {
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) return {};
@@ -99,7 +101,9 @@ void Pass::record(Context& ctx, VkCommandBuffer cb, uint32_t gw, uint32_t gh, ui
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set, 0, nullptr);
     if (push && pushBytes) vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes, push);
+    if (g_passHook) g_passHook(cb, this, true);
     vkCmdDispatch(cb, (gw + lx - 1) / lx, (gh + ly - 1) / ly, (gz + lz - 1) / lz);
+    if (g_passHook) g_passHook(cb, this, false);
 }
 
 void Pass::destroy(Context& ctx) {

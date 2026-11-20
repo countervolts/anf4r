@@ -66,15 +66,16 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
     if (pre.empty() || post.empty() || cv.empty()) { ctx.error = "missing SR spv in " + cfg.shaderDir; return false; }
     if (!pre_.build(ctx, pre, {B(0,SI,"c"),B(1,SI,"d"),B(2,SI,"mv"),B(3,SI,"pc"),B(4,SI,"pf"),B(5,SM,"s"),B(6,SB,"mi"),B(7,ST,"clr"),B(8,ST,"pw")},
                     {S(0,cfg.lrW),S(1,cfg.lrH)}, 24, 8, 8, 1, "main")) return false;
-    pre_.bindSampler(5, sBorder_);
+    pre_.bindSampler(5, sBorder_); pre_.label = "sr_pre";
     if (!post_.build(ctx, post, {B(0,SI,"c"),B(1,SI,"pw"),B(2,SB,"net"),B(3,SM,"s"),B(4,ST,"hist"),B(5,ST,"feat"),B(6,ST,"out")},
                      {S(0,cfg.lrW),S(1,cfg.lrH),S(2,netW)}, 16, 8, 8, 1, "main")) return false;
-    post_.bindSampler(3, sEdge_);
+    post_.bindSampler(3, sEdge_); post_.label = "sr_post";
     int cw = cfg.lrW, ch = cfg.lrH;
     for (int i = 0; i < 4; ++i) {
         int ow = (cw - 1) / L[i].stride + 1, oh = (ch - 1) / L[i].stride + 1;
         if (!conv_[i].build(ctx, cv, {B(0,SB,"in"),B(1,SB,"w"),B(2,SB,"b"),B(3,SB,"s"),B(4,SB,"o"),B(5,SB,"o8")},
                             {S(0,cw),S(1,ch),S(2,L[i].ic),S(3,L[i].oc),S(4,L[i].stride),S(5,ow),S(6,oh),S(7,0),S(8,-128),S(9,127),S(10,-128),S(11,0)}, 0, 8, 8, 1, "main")) return false;
+        conv_[i].label = std::string("sr_") + L[i].name;
         conv_[i].bindBuffer(4, act[i].buffer); conv_[i].bindBuffer(5, act[i].buffer);
         cw = ow; ch = oh;
     }

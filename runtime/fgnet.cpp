@@ -173,6 +173,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
         std::vector<BindDesc> b = {{0,BindKind::StorageBuffer,"in"},{1,BindKind::StorageBuffer,"w"},{2,BindKind::StorageBuffer,"b"},{3,BindKind::StorageBuffer,"s"},{4,BindKind::StorageBuffer,"o"},{5,BindKind::StorageBuffer,"o8"}};
         std::vector<SpecConst> sc = {{0,cw},{1,ch},{2,L.ic},{3,L.oc},{4,L.stride},{5,ow},{6,oh},{7,half?1:0},{8,-128},{9,127},{10,i == 0 ? 0 : -128}};
         if (!passes_[i].build(ctx, cs, b, sc, 0, 8, 8, 1, "main")) return false;
+        passes_[i].label = std::string(m.isLR ? "lr_" : "qr_") + L.name;
         passes_[i].bindBuffer(1, wbuf_[i].buffer); passes_[i].bindBuffer(2, bbuf_[i].buffer); passes_[i].bindBuffer(3, sbuf_[i].buffer);
         passes_[i].bindBuffer(4, act_[i].buffer); passes_[i].bindBuffer(5, act_[i].buffer);
         int gz = half ? (L.oc + 1) / 2 : L.oc; steps_.push_back({(int)i, ow, oh, gz});
@@ -186,7 +187,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
     else { fb = (size_t)dims.flowW * dims.flowH * 4; mb = ((size_t)nw * nh + 3) & ~size_t(3); }
     ctx.createBuffer(flow, fb, false); ctx.createBuffer(mask, mb, false);
     for (int mode = 0; mode < 2; ++mode) {
-        Pass& p = passes_[nl + mode];
+        Pass& p = passes_[nl + mode]; p.label = std::string(m.isLR ? "lr_" : "qr_") + (mode ? "head_mask" : "head_flow");
         if (m.isLR) {
             std::vector<BindDesc> b = {{0,BindKind::StorageBuffer,"in"},{1,BindKind::StorageBuffer,"w"},{2,BindKind::StorageBuffer,"b"},{3,BindKind::StorageBuffer,"o"}};
             if (!p.build(ctx, hl, b, {{0,nw},{1,nh},{2,mode}}, 0, 8, 8, 1, "main")) return false;

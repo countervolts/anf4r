@@ -55,6 +55,7 @@ bool FrameGen::init(Context& ctx, const FgConfig& cfg) {
     auto build = [&](Pass& p, const char* n, std::vector<BindDesc> b, std::vector<SpecConst> s, uint32_t push) {
         auto code = sp(n); if (code.empty()) { ctx.error = std::string("missing spirv ") + n; return false; }
         if (!p.build(ctx, code, b, s, push, 16, 16, 1, "main_cs")) { ctx.error = std::string(n) + ": " + ctx.error; return false; }
+        p.label = n;
         if (p.hasBinding(128)) p.bindSampler(128, samp_);
         return true;
     };
