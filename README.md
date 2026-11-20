@@ -11,7 +11,6 @@ which parts are Qualcomm's unchanged shaders versus our reconstructions.
 ## Model data
 anf4r needs the ANF model data from **your own copy** of the ANF SDK (`libanf.so`): weights, quantisation scales and the frame-generation SPIR-V passes,
 laid out as `modelzoo/`, `spirv/` (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#data-layout)). `scripts/install_anf.py` assembles the folder next to a game.
-This repository does not provide the data and does not provide a way to obtain it; see [NOTICE.md](NOTICE.md).
 
 ## Benchmarks
 GPU time per frame at **2560×1440 output** on an RX 7700 XT (RDNA3, RADV / Mesa 26.2), measured with timestamp queries around every pass (`build/cm/profile sr|fg W H [OUT_W OUT_H]`), mean of 20 frames,
