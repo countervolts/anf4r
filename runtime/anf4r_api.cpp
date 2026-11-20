@@ -3,11 +3,14 @@
 #include "anf4r.h"
 #include "fg.h"
 #include "sr.h"
+#include <cstdio>
+#include <fstream>
 #include <map>
 #include <memory>
 
 using namespace anf4r;
 
+static void dumpFlush(struct anf4r_context* c);
 struct anf4r_context {
     Context ctx;
     std::string dataDir, error;
@@ -19,6 +22,9 @@ struct anf4r_context {
     std::unique_ptr<FrameGen> fg; int fgW = 0, fgH = 0; uint64_t fgFrames = 0;
     Texture fgColor, fgDepth, fgMotion, fgOut, real; VkFormat realFmt = VK_FORMAT_UNDEFINED;
     Pass resample; bool generated = false;
+    // input capture (debug): create <dataDir>/dump.txt containing a frame count N; the next N SR frames are written to <dataDir>/dump/
+    int dumpLeft = 0, dumpIdx = 0, upscaleCalls = 0; bool dumpPending = false; std::string dumpMeta;
+    Buffer dumpBuf[3]; VkDeviceSize dumpSize[3] = {0, 0, 0};
 };
 
 static const Texture& view(anf4r_context* c, const anf4r_image& im) {
@@ -44,6 +50,7 @@ int anf4r_create(anf4r_context** out, PFN_vkGetInstanceProcAddr gipa, VkInstance
 void anf4r_destroy(anf4r_context* c) {
     if (!c) return;
     vkDeviceWaitIdle(c->ctx.device);
+    dumpFlush(c); for (auto& b : c->dumpBuf) if (b.buffer) c->ctx.destroyBuffer(b);
     if (c->sr) c->sr->destroy(c->ctx);
     if (c->fg) { c->fg->destroy(c->ctx); c->resample.destroy(c->ctx); }
     for (Texture* t : {&c->fgColor, &c->fgDepth, &c->fgMotion, &c->fgOut, &c->real}) c->ctx.destroyTexture(*t);
@@ -74,8 +81,51 @@ int anf4r_upscale_init(anf4r_context* c, uint32_t ow, uint32_t oh, uint32_t iw, 
     c->srW = iw; c->srH = ih; return 0;
 }
 
+// ---- input capture ----
+static void dumpFlush(anf4r_context* c) {
+    if (!c->dumpPending) return;
+    vkDeviceWaitIdle(c->ctx.device);
+    static const char* nm[3] = {"color", "depth", "motion"};
+    for (int i = 0; i < 3; ++i) {
+        char f[512]; snprintf(f, sizeof f, "%s/dump/frame_%03d.%s.bin", c->dataDir.c_str(), c->dumpIdx, nm[i]);
+        std::ofstream o(f, std::ios::binary); o.write((const char*)c->dumpBuf[i].map, c->dumpSize[i]);
+    }
+    std::ofstream m(c->dataDir + "/dump/manifest.txt", std::ios::app); m << c->dumpMeta << "\n";
+    ++c->dumpIdx; c->dumpPending = false;
+}
+static void dumpMaybeStart(anf4r_context* c) {
+    if (c->dumpLeft > 0 || (++c->upscaleCalls % 30) != 1) return;
+    std::ifstream t(c->dataDir + "/dump.txt"); int n = 0; if (!(t >> n) || n <= 0) return; t.close();
+    std::remove((c->dataDir + "/dump.txt").c_str());
+    #ifdef _WIN32
+    std::string cmd = "mkdir \"" + c->dataDir + "\\dump\" 2>nul"; system(cmd.c_str());
+    #else
+    std::string cmd = "mkdir -p \"" + c->dataDir + "/dump\""; if (system(cmd.c_str())) {}
+    #endif
+    std::remove((c->dataDir + "/dump/manifest.txt").c_str());
+    c->dumpLeft = n; c->dumpIdx = 0;
+}
+static void dumpRecord(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc* d, float jx, float jy) {
+    dumpFlush(c);
+    if (c->dumpLeft <= 0) return;
+    const anf4r_image* im[3] = {&d->color, &d->depth, &d->motion};
+    for (int i = 0; i < 3; ++i) {
+        VkDeviceSize need = (VkDeviceSize)im[i]->width * im[i]->height * formatBytes(im[i]->format);
+        if (!formatBytes(im[i]->format)) return;
+        if (need > c->dumpSize[i] || !c->dumpBuf[i].buffer) { if (c->dumpBuf[i].buffer) c->ctx.destroyBuffer(c->dumpBuf[i]); c->ctx.createBuffer(c->dumpBuf[i], need, true); }
+        c->dumpSize[i] = need;
+        bool depthFmt = im[i]->format == VK_FORMAT_D32_SFLOAT || im[i]->format == VK_FORMAT_D24_UNORM_S8_UINT || im[i]->format == VK_FORMAT_D32_SFLOAT_S8_UINT || im[i]->format == VK_FORMAT_X8_D24_UNORM_PACK32 || im[i]->format == VK_FORMAT_D16_UNORM;
+        VkBufferImageCopy r{}; r.imageSubresource = {(VkImageAspectFlags)(depthFmt ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1}; r.imageExtent = {im[i]->width, im[i]->height, 1};
+        vkCmdCopyImageToBuffer(cb, im[i]->image, VK_IMAGE_LAYOUT_GENERAL, c->dumpBuf[i].buffer, 1, &r);
+    }
+    char m[512]; snprintf(m, sizeof m, "%d %u %u %d %u %u %d %u %u %d %u %u %g %g %g %g %g %g %d %d %u %u", c->dumpIdx,
+        d->color.width, d->color.height, (int)d->color.format, d->depth.width, d->depth.height, (int)d->depth.format, d->motion.width, d->motion.height, (int)d->motion.format,
+        d->content_width, d->content_height, d->jitter_x, d->jitter_y, d->motion_scale_x, d->motion_scale_y, jx, jy, d->reset, d->depth_reversed, d->output.width, d->output.height);
+    c->dumpMeta = m; c->dumpPending = true; --c->dumpLeft;
+}
+
 int anf4r_upscale(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc* d) {
-    c->error.clear();
+    c->error.clear(); dumpMaybeStart(c);
     uint32_t iw = d->content_width ? d->content_width : d->color.width, ih = d->content_height ? d->content_height : d->color.height;
     if (!c->sr || c->srW != (int)iw || c->srH != (int)ih) { int r = anf4r_upscale_init(c, c->outW ? c->outW : 2 * iw, c->outH ? c->outH : 2 * ih, iw, ih); if (r) return r; }
     if (d->reset) c->sr->reset();
@@ -85,6 +135,7 @@ int anf4r_upscale(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc
     // MV: texture value * scale = pixels (previous - current)  ->  ANF wants (current - previous) in LR pixels
     c->sr->mvScale[0] = -d->motion_scale_x; c->sr->mvScale[1] = -d->motion_scale_y;
     c->sr->setDepthInverted(!d->depth_reversed);
+    dumpRecord(c, cb, d, d->jitter_x, -d->jitter_y);
     // desc jitter = sample offset in image coordinates (x right, y down); ANF's jitterOffset has y up
     c->sr->record(c->ctx, cb, col, dep, mv, c->srOut, d->jitter_x, -d->jitter_y);
     // convert/copy the internal RGBA16F result into the caller's output image
