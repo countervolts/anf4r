@@ -14,6 +14,7 @@ rm -rf "$APP"; mkdir -p "$APP/out" "$COMPAT"
 cp -f "$HARNESS" "$APP/d3d12_harness.exe"; cp -f "$OPTI" "$APP/dxgi.dll"
 python3 "$ROOT/scripts/install_anf.py" --out "$APP" >/dev/null
 ln -s "$FIX" "$APP/fixture"
+[[ -n "${ANF_STAB:-}" ]] && printf "stabilize = %s\npre_exposure = %s\n" "$ANF_STAB" "${ANF_PREEXP:-1}" > "$APP/anf4r/data/config.txt"
 [[ -n "${ANF_DUMP:-}" ]] && echo "$ANF_DUMP" > "$APP/anf4r/data/dump.txt"   # capture the first N SR frames to anf4r/data/dump/
 FGEN=false; FGIN=nofg; FGOUT=nofg
 if [[ -n "${ANF_FG:-}" ]]; then FGEN=true; FGIN=upscaler; FGOUT=anf; export M4R_HARNESS_SWAPCHAIN=1; fi   # ANF_FG=1: also ANF frame generation (needs > 14 frames)

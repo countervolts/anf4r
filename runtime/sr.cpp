@@ -27,11 +27,22 @@ int SuperRes::jitterPhase(float jx, float jy, float* qx, float* qy) const {
     // ASSUMED: 8x8 phase grid over [-0.5,0.5]^2 (64 weight sets per layer), index = iy*8 + ix.
     int ix = std::min(7, std::max(0, (int)std::floor((jx + 0.5f) * 8.f))), iy = std::min(7, std::max(0, (int)std::floor((jy + 0.5f) * 8.f)));
     if (qx) *qx = (ix + 0.5f) / 8.f - 0.5f; if (qy) *qy = (iy + 0.5f) / 8.f - 0.5f;
-    return iy * 8 + ix;
+    static int mode = getenv("ANF_PHASE_MODE") ? atoi(getenv("ANF_PHASE_MODE")) : 0;   // debug: alternative index layouts
+    if (mode >= 8) {   // debug: weight sets placed on a Halton(2,3) sequence, nearest set to the requested jitter
+        auto halton = [](int i, int b) { float f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i /= b; } return r; };
+        int off = (mode == 8 || mode == 10) ? 1 : 0; bool swap = mode >= 10; int best = 0; float bd = 1e9f, bx = 0, by = 0;
+        for (int i = 0; i < 64; ++i) { float hx = halton(i + off, swap ? 3 : 2) - 0.5f, hy = halton(i + off, swap ? 2 : 3) - 0.5f; float d = (hx - jx) * (hx - jx) + (hy - jy) * (hy - jy); if (d < bd) { bd = d; best = i; bx = hx; by = hy; } }
+        if (qx) *qx = bx; if (qy) *qy = by; return best;
+    }
+    int fx = 7 - ix, fy = 7 - iy;
+    switch (mode) { case 1: return ix * 8 + iy; case 2: return iy * 8 + fx; case 3: return fy * 8 + ix; case 4: return fy * 8 + fx;
+                    case 5: return ix * 8 + fy; case 6: return fx * 8 + iy; case 7: return fx * 8 + fy; default: return iy * 8 + ix; }
 }
 
 bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
-    cfg_ = cfg; mvScale[0] = (float)cfg.lrW; mvScale[1] = (float)cfg.lrH; hrW = cfg.lrW * 2; hrH = cfg.lrH * 2; netW = (cfg.lrW + 1) / 2; netH = (cfg.lrH + 1) / 2;
+    cfg_ = cfg; if (getenv("ANF_STAB")) cfg_.stabilize = (float)atof(getenv("ANF_STAB"));
+    if (getenv("ANF_PREEXP")) cfg_.preExposure = (float)atof(getenv("ANF_PREEXP"));
+    mvScale[0] = (float)cfg.lrW; mvScale[1] = (float)cfg.lrH; hrW = cfg.lrW * 2; hrH = cfg.lrH * 2; netW = (cfg.lrW + 1) / 2; netH = (cfg.lrH + 1) / 2;
     const SrLayer L[4] = {{"cnn1", 20, 32, 2}, {"cnn2-0", 32, 32, 1}, {"cnn2-1", 32, 32, 1}, {"cnn3", 32, 64, 1}};
     std::string err;
     for (int t = 0; t < 2; ++t) {   // per-jitter layers: cnn1 (t=0) and cnn3 (t=1)
@@ -51,9 +62,10 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
     act.resize(4);
     for (int i = 0; i < 4; ++i) ok &= ctx.createBuffer(act[i], (size_t)netW * netH * L[i].oc, false);
     ok &= ctx.createTexture(colorLR, VK_FORMAT_R16G16B16A16_SFLOAT, cfg.lrW, cfg.lrH) && ctx.createTexture(prevWarped, VK_FORMAT_R32G32_SFLOAT, cfg.lrW, cfg.lrH);
+    if (cfg_.stabilize > 0) for (int i = 0; i < 2; ++i) ok &= ctx.createTexture(stabHist[i], VK_FORMAT_R16G16B16A16_SFLOAT, hrW, hrH);
     for (int i = 0; i < 2; ++i) ok &= ctx.createTexture(histColor[i], VK_FORMAT_R16G16B16A16_SFLOAT, hrW, hrH) && ctx.createTexture(histFeat[i], VK_FORMAT_R32_SFLOAT, hrW, hrH);
     if (!ok) { ctx.error = "SR allocation failed"; return false; }
-    { VkCommandBuffer cb = ctx.begin(); for (Texture* t : {&colorLR, &prevWarped, &histColor[0], &histColor[1], &histFeat[0], &histFeat[1]}) ctx.toLayout(cb, *t, VK_IMAGE_LAYOUT_GENERAL); ctx.submit(cb); }
+    { VkCommandBuffer cb = ctx.begin(); for (Texture* t : {&colorLR, &prevWarped, &histColor[0], &histColor[1], &histFeat[0], &histFeat[1], &stabHist[0], &stabHist[1]}) if (t->image) ctx.toLayout(cb, *t, VK_IMAGE_LAYOUT_GENERAL); ctx.submit(cb); }
 
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter = si.minFilter = VK_FILTER_LINEAR; si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK; si.maxLod = 0;
@@ -68,8 +80,14 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
                     {S(0,cfg.lrW),S(1,cfg.lrH)}, 24, 8, 8, 1, "main")) return false;
     pre_.bindSampler(5, sBorder_); pre_.label = "sr_pre";
     if (!post_.build(ctx, post, {B(0,SI,"c"),B(1,SI,"mv2"),B(2,SB,"net"),B(3,SM,"s"),B(4,ST,"hist"),B(5,ST,"feat"),B(6,ST,"out"),B(7,SI,"pc"),B(8,SM,"sb")},
-                     {S(0,cfg.lrW),S(1,cfg.lrH),S(2,netW)}, 16, 8, 8, 1, "main")) return false;
+                     {S(0,cfg.lrW),S(1,cfg.lrH),S(2,netW),S(4,cfg_.stabilize > 0 ? 1 : 0)}, 20, 8, 8, 1, "main")) return false;
     post_.bindSampler(3, sEdge_); post_.bindSampler(8, sBorder_); post_.label = "sr_post";
+    if (cfg_.stabilize > 0) {
+        auto stab = readSpirv(cfg.shaderDir + "/sr_stab.spv");
+        if (stab.empty()) { ctx.error = "missing sr_stab.spv"; return false; }
+        if (!stab_.build(ctx, stab, {B(0,SI,"cur"),B(1,SI,"mv"),B(2,SI,"prev"),B(3,SM,"s"),B(4,ST,"stab"),B(5,ST,"out")}, {}, 16, 8, 8, 1, "main")) return false;
+        stab_.bindSampler(3, sBorder_); stab_.label = "sr_stab";
+    }
     int cw = cfg.lrW, ch = cfg.lrH;
     for (int i = 0; i < 4; ++i) {
         int ow = (cw - 1) / L[i].stride + 1, oh = (ch - 1) / L[i].stride + 1;
@@ -96,7 +114,7 @@ bool SuperRes::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
     ctx.barrierAll(cb);   // order against the previous frame's commands (submission order)
     if (needClear_) {
         VkClearColorValue z{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        for (Texture* t : {&histColor[0], &histColor[1], &histFeat[0], &histFeat[1]}) vkCmdClearColorImage(cb, t->image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &r);
+        for (Texture* t : {&histColor[0], &histColor[1], &histFeat[0], &histFeat[1], &stabHist[0], &stabHist[1]}) if (t->image) vkCmdClearColorImage(cb, t->image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &r);
         ctx.barrierAll(cb); needClear_ = false; frame_ = 0;
     }
     float qx, qy; int ph = jitterPhase(jx, jy, &qx, &qy);
@@ -116,20 +134,25 @@ bool SuperRes::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
         in = act[i].buffer; cw = ow; ch = oh;
     }
     // 3. postprocess (grid = HR)
-    struct { float jx, jy; int w, h; } pc{qx, qy, hrW, hrH};
+    struct { float jx, jy; int w, h; float e; } pc{qx, qy, hrW, hrH, cfg_.preExposure};
     post_.bindImage(0, colorLR.view); post_.bindImage(1, prevWarped.view); post_.bindImage(7, histColor[p].view); post_.bindBuffer(2, act[3].buffer);
     post_.bindImage(4, histColor[c].view); post_.bindImage(5, histFeat[c].view); post_.bindImage(6, output.view);
     post_.record(ctx, cb, hrW, hrH, 1, &pc, sizeof pc); ctx.barrierAll(cb);
+    if (cfg_.stabilize > 0) {
+        struct { int w, h; float beta, e; } sp{hrW, hrH, frame_ == 0 ? 0.0f : cfg_.stabilize, cfg_.preExposure};
+        stab_.bindImage(0, histColor[c].view); stab_.bindImage(1, prevWarped.view); stab_.bindImage(2, stabHist[p].view); stab_.bindImage(4, stabHist[c].view); stab_.bindImage(5, output.view);
+        stab_.record(ctx, cb, hrW, hrH, 1, &sp, sizeof sp); ctx.barrierAll(cb);
+    }
     ++frame_;
     return true;
 }
 
 void SuperRes::destroy(Context& ctx) {
-    pre_.destroy(ctx); post_.destroy(ctx); for (auto& p : conv_) p.destroy(ctx);
+    pre_.destroy(ctx); post_.destroy(ctx); stab_.destroy(ctx); for (auto& p : conv_) p.destroy(ctx);
     for (int t = 0; t < 2; ++t) { for (auto& l : phaseW_[t]) { ctx.destroyBuffer(l.w); ctx.destroyBuffer(l.b); ctx.destroyBuffer(l.s); } phaseW_[t].clear(); }
     for (auto& l : shared_) { ctx.destroyBuffer(l.w); ctx.destroyBuffer(l.b); ctx.destroyBuffer(l.s); }
     ctx.destroyBuffer(modelIn); for (auto& b : act) ctx.destroyBuffer(b); act.clear();
-    for (Texture* t : {&colorLR, &prevWarped, &histColor[0], &histColor[1], &histFeat[0], &histFeat[1]}) ctx.destroyTexture(*t);
+    for (Texture* t : {&colorLR, &prevWarped, &histColor[0], &histColor[1], &histFeat[0], &histFeat[1], &stabHist[0], &stabHist[1]}) ctx.destroyTexture(*t);
     if (sBorder_) vkDestroySampler(ctx.device, sBorder_, nullptr); if (sEdge_) vkDestroySampler(ctx.device, sEdge_, nullptr);
 }
 

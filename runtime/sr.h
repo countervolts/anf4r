@@ -10,6 +10,7 @@ struct SrConfig {
     std::string shaderDir = "build";
     float preExposure = 1.0f;                       // tonemap constant (the inverse in sr_post assumes 1.0)
     bool invertDepth = false;                       // true: input depth is forward-Z (smaller = nearer)
+    float stabilize = 0.0f;                         // output stabiliser history weight beta (0 = off = pure ANF output); divergences D8
 };
 
 struct SrLayer { std::string name; int ic, oc, stride; };
@@ -29,13 +30,13 @@ public:
     int jitterPhase(float jx, float jy, float* qx, float* qy) const;
     Buffer modelIn;
     std::vector<Buffer> act;                        // cnn1, cnn2-0, cnn2-1, cnn3 outputs (int8 = uint8-128)
-    Texture colorLR, prevWarped, histColor[2], histFeat[2];
+    Texture colorLR, prevWarped, histColor[2], histFeat[2], stabHist[2];
 private:
     SrConfig cfg_;
     struct LW { Buffer w, b, s; };
     std::vector<LW> phaseW_[2];                     // [0] cnn1 per phase, [1] cnn3 per phase
     LW shared_[2];                                  // cnn2-0, cnn2-1
-    Pass pre_, post_, conv_[4]; bool convWmma_[4] = {};
+    Pass pre_, post_, stab_, conv_[4]; bool convWmma_[4] = {};
     VkSampler sBorder_ = VK_NULL_HANDLE, sEdge_ = VK_NULL_HANDLE;
     bool needClear_ = true; uint32_t frame_ = 0;
 };

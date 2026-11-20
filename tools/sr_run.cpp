@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
     ctx.createTexture(mv, VK_FORMAT_R16G16_SFLOAT, W, H); ctx.createTexture(out, VK_FORMAT_R16G16B16A16_SFLOAT, 2 * W, 2 * H);
     { VkCommandBuffer cb = ctx.begin(); ctx.toLayout(cb, out, VK_IMAGE_LAYOUT_GENERAL); ctx.submit(cb); }
     size_t n = (size_t)W * H; std::vector<float> col(n * 3), dep(n), mvf(n * 2); std::vector<uint16_t> c16(n * 4), m16(n * 2), o16((size_t)4 * n * 4);
-    double totalMs = 0;
+    double totalMs = 0; int saveLast = getenv("ANF_SAVE_LAST") ? atoi(getenv("ANF_SAVE_LAST")) : N;   // only write the last K frames
     for (int f = 0; f < N; ++f) {
         float j[2]; if (fread(j, 4, 2, fi) != 2 || fread(col.data(), 4, col.size(), fi) != col.size() || fread(dep.data(), 4, n, fi) != n || fread(mvf.data(), 4, mvf.size(), fi) != mvf.size()) { printf("short read at frame %d\n", f); return 1; }
         for (size_t i = 0; i < n; ++i) { for (int c = 0; c < 3; ++c) c16[i * 4 + c] = floatToHalf(col[i * 3 + c]); c16[i * 4 + 3] = floatToHalf(1.f); m16[i * 2] = floatToHalf(mvf[i * 2]); m16[i * 2 + 1] = floatToHalf(mvf[i * 2 + 1]); }
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
         totalMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         ctx.download(out, o16.data(), o16.size() * 2);
         std::vector<float> o((size_t)4 * n * 3); for (size_t i = 0; i < (size_t)4 * n; ++i) for (int c = 0; c < 3; ++c) o[i * 3 + c] = halfToFloat(o16[i * 4 + c]);
-        fwrite(o.data(), 4, o.size(), fo);
+        if (f >= N - saveLast) fwrite(o.data(), 4, o.size(), fo);
     }
     if (getenv("DBG")) {   // statistics of the decoded net output (raw = int8+128): offset_x, offset_y, alpha, feature per HR sub-position
         size_t bytes = (size_t)sr.netW * sr.netH * 64; Buffer h; ctx.createBuffer(h, bytes, true); VkCommandBuffer cb = ctx.begin(); VkBufferCopy c{0, 0, bytes}; vkCmdCopyBuffer(cb, sr.act[3].buffer, h.buffer, 1, &c); ctx.submit(cb);

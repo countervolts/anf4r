@@ -106,3 +106,14 @@ store) is the same per-element code. int32 accumulation is order-independent, so
 by `cmp` of the SR output against the pre-optimisation baseline (also for odd sizes, and with `ANF_NO_WMMA=1` which selects the scalar fallback). The LR head still uses plain fp32 sums in the old order (one
 thread per channel instead of per position: same arithmetic). `sr_pre` uses an LDS tile for the 3x3 depth/MV search; the warped previous colour is no longer written to a 29 MB image but re-derived in
 `sr_post` with the identical `precise` expressions. Pipelines pin subgroup size 32; if the device refuses the cooperative-matrix pipeline the scalar kernels are used.
+
+## D8 — optional output stabiliser and exposure constant (NOT Qualcomm's behaviour; off by default)  [measured on real game frames]
+Why: on a 120-frame capture from Ghost of Tsushima (`tools/analyze_dump.py`; 856x480 RGBA8 **LDR** colour, reverse-Z depth squashed into 0..0.05, 8-phase jitter whose values are exactly
+the centres of an 8x8 grid, MVs ~0) our SR reconstruction shimmers. Offline experiments on those exact frames (`tools/dump_experiments.py`; flicker = mean |frame_t - frame_t-1|, phase-leak = share of
+a pixel's temporal variance explained by the 8-frame jitter phase, input LR frames: 0.73): the jitter conventions are the best of every alternative tried (4 sign combinations, 8 index layouts, Halton tables,
+both model variants: all worse), and the live output equals the offline output (no live-only bug). Output flicker 7.3e-3 / phase-leak 0.46; a plain temporal upscaler on the same frames 2.0e-3 / 0.17 but 2.5x blurrier.
+- `pre_exposure` (tonemap constant `t = sqrt(c)/(max+e)`, inverse `(t*e/(1-max t))^2`): e=4 is better than the vendor-assumed 1 on this LDR content (flicker 6.0e-3, leak 0.39); with 8-16 the leak falls to 0.31-0.33.
+  Unknown for HDR input, so the default stays 1 (`pre_exposure` in `config.txt`).
+- `sr_stab.comp` (`stabilize = beta` in `config.txt`, 0 = off): a second history of ANF's tonemapped output, `s = mix(cur, clamp(reproject(s_prev), min3x3(cur), max3x3(cur)), beta)`, then the inverse tonemap. ANF's own recurrent
+  history is not touched, so with beta = 0 the output is exactly the reconstructed vendor pipeline (verified bit-identical). beta 0.75, e=4: flicker 2.5e-3, leak 0.15, sharpness 24.8e-3 vs plain TAAU 11.8e-3.
+  Cost ~0.2 ms net at 1280x720 input. Installed for Ghost of Tsushima with `stabilize = 0.75`, `pre_exposure = 4` in `anf4r/data/config.txt`.

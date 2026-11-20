@@ -7,6 +7,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(constant_id = 0) const int LR_W = 1;
 layout(constant_id = 1) const int LR_H = 1;
 layout(constant_id = 2) const int NET_W = 1;      // width of the net output tensor (= ceil(LR_W/2))
+layout(constant_id = 4) const int STAB = 0;          // 1: the stabiliser pass writes the final output
 layout(constant_id = 3) const float TM_MAX = 0.9995; // upper clamp of the tonemapped value before the inverse (ASSUMED)
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
@@ -19,7 +20,7 @@ layout(set = 0, binding = 3) uniform sampler sampEdge;         // linear, clamp-
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D imgHist;    // tonemapped HR (next frame's prev colour)
 layout(set = 0, binding = 5, r32f) uniform writeonly image2D imgFeat;       // HR feature (next frame's prev feature)
 layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D imgOut;     // final linear HDR output
-layout(push_constant) uniform PC { vec2 jitter; int hrW; int hrH; } pc;     // quantised jitter offsets (LR px)
+layout(push_constant) uniform PC { vec2 jitter; int hrW; int hrH; float preExposure; } pc;     // quantised jitter offsets (LR px)
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -42,8 +43,9 @@ void main() {
     vec3 t = a * past + (1.0 - a) * cand;
     imageStore(imgHist, p, vec4(t, 1.0));
     imageStore(imgFeat, p, vec4(raw.w, 0.0, 0.0, 0.0));
+    if (STAB != 0) return;
     t = clamp(t, 0.0, TM_MAX);
     float m = max(t.x, max(t.y, t.z));
-    vec3 lin = t / (1.0 - m); lin *= lin;                        // inverse of t = sqrt(c)/(max(sqrt(c)) + 1)
+    vec3 lin = (t * pc.preExposure) / (1.0 - m); lin *= lin;                        // inverse of t = sqrt(c)/(max(sqrt(c)) + 1)
     imageStore(imgOut, p, vec4(lin, 1.0));
 }

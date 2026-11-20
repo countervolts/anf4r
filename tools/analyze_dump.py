@@ -17,7 +17,7 @@ def load_color(b, fmt, w, h):
     if fmt == 64: v = np.frombuffer(b, '<u4').reshape(h, w); return np.stack([(v & 1023), (v >> 10) & 1023, (v >> 20) & 1023], -1) / 1023.0
     raise SystemExit(f'unsupported colour format {fmt}')
 def load_depth(b, fmt, w, h):
-    if fmt in (126, 100): return np.frombuffer(b, '<f4').reshape(h, w)
+    if fmt in (126, 100, 130): return np.frombuffer(b, '<f4').reshape(h, w)
     if fmt in (125, 129): return (np.frombuffer(b, '<u4').reshape(h, w) & 0xFFFFFF) / 16777215.0
     raise SystemExit(f'unsupported depth format {fmt}')
 def load_mv(b, fmt, w, h):
