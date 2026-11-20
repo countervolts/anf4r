@@ -11,7 +11,9 @@ layout(constant_id = 3) const float TM_MAX = 0.9995; // upper clamp of the tonem
 
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 layout(set = 0, binding = 0) uniform texture2D texColorLR;     // tonemapped LR colour from preprocess
-layout(set = 0, binding = 1) uniform texture2D texPrevWarped;  // warped previous HR colour from preprocess
+layout(set = 0, binding = 1) uniform texture2D texMV;          // MV (LR pixels, curr - prev) from preprocess
+layout(set = 0, binding = 7) uniform texture2D texPrevColor;   // previous HR tonemapped history
+layout(set = 0, binding = 8) uniform sampler sampBorder;       // linear, clamp-to-border (== CLK_ADDRESS_CLAMP), as in preprocess
 layout(std430, binding = 2) readonly buffer NetOut { int8_t v[]; } net;   // cnn3 output, int8 = uint8-128, 64 ch / net pixel
 layout(set = 0, binding = 3) uniform sampler sampEdge;         // linear, clamp-to-edge
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D imgHist;    // tonemapped HR (next frame's prev colour)
@@ -30,7 +32,12 @@ void main() {
     anchor = max(floor(anchor), vec2(0.0));
     vec2 grid = anchor + raw.xy;
     vec3 cand = textureLod(sampler2D(texColorLR, sampEdge), (grid + 0.5) / vec2(float(LR_W), float(LR_H)), 0.0).rgb;
-    vec3 past = texelFetch(texPrevWarped, p, 0).rgb;
+    // warped previous colour: the same bilinear sample sr_pre took for this HR pixel (identical expressions, `precise` so both shaders round alike)
+    ivec2 lp = p >> 1; int k = (p.x & 1) + 2 * (p.y & 1);
+    precise vec2 mvPx = texelFetch(texMV, lp, 0).rg;
+    precise vec2 uv0 = vec2(2.0 * float(lp.x) - 2.0 * mvPx.x + 0.5, 2.0 * float(lp.y) - 2.0 * mvPx.y + 0.5);
+    precise vec2 uvk = uv0 + vec2(float(k & 1), float(k >> 1));
+    vec3 past = textureLod(sampler2D(texPrevColor, sampBorder), uvk / vec2(2.0 * float(LR_W), 2.0 * float(LR_H)), 0.0).rgb;
     float a = raw.z;
     vec3 t = a * past + (1.0 - a) * cand;
     imageStore(imgHist, p, vec4(t, 1.0));

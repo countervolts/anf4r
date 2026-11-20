@@ -64,6 +64,8 @@ bool Pass::build(Context& ctx, const std::vector<uint32_t>& spirv, const std::ve
     cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; cpi.stage.module = module_; cpi.stage.pName = entry;
     if (!specs.empty()) cpi.stage.pSpecializationInfo = &si;
+    VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rss{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+    if (requiredSubgroup) { rss.requiredSubgroupSize = requiredSubgroup; cpi.stage.pNext = &rss; }
     cpi.layout = pipeLayout_;
     if (vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &cpi, nullptr, &pipeline_) != VK_SUCCESS) {
         ctx.error = "computePipeline"; return false;

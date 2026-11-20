@@ -1,0 +1,130 @@
+#version 450
+// anf4r: int8 3x3 convolution as an implicit GEMM on the RDNA3 matrix units (VK_KHR_cooperative_matrix, int8 x int8 -> int32 16x16x16).
+// Bit-identical to fg_conv_i8.comp: int32 accumulation is exact in any order; the epilogue is the same per-channel fma/clamp/rndaz.
+// One wave32 per workgroup computes 32 output pixels (one row segment) x 32 output channels: 2x2 accumulator tiles.
+// A (im2col rows) is staged through LDS with the vendor's out-of-bounds value (PADV); B (weights [oc][ky][kx][ICW]) is loaded column-major from memory.
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 0) const int IN_W = 1;
+layout(constant_id = 1) const int IN_H = 1;
+layout(constant_id = 2) const int ICW = 32;        // weight channels per tap (multiple of 16, zero padded)
+layout(constant_id = 3) const int INSTRIDE = 32;   // input bytes per pixel (>= ICW, multiple of 8)
+layout(constant_id = 4) const int OC = 32;         // multiple of 32
+layout(constant_id = 5) const int STRIDE = 1;
+layout(constant_id = 6) const int OUT_W = 1;
+layout(constant_id = 7) const int OUT_H = 1;
+layout(constant_id = 8) const int OUT_MODE = 0;    // 0 int8 NHWC, 1 fp16 NHWC (relu)
+layout(constant_id = 9) const int LO = -128;
+layout(constant_id = 10) const int HI = 127;
+layout(constant_id = 11) const int PADV = 0;
+layout(constant_id = 12) const int OUT_OFF = 0;
+// OUT_MODE 2 = QR flow/mask head (OC padded to 32, 20 real channels): uint8 outputs, depth-to-space x2 (DCR) for channels 0..15, mask plane for channel 16
+layout(constant_id = 13) const int FLOW_ZP = 0;
+layout(constant_id = 14) const int MASK_ZP = 0;
+layout(constant_id = 15) const int RELU = 1;
+layout(constant_id = 16) const int FLOW_PITCH = 1;   // flow row pitch in pixels (= 2*OUT_W)
+layout(constant_id = 17) const int MASK_PITCH = 1;
+
+layout(std430, binding = 0) readonly buffer InBuf { uvec2 v[]; } inp;
+layout(std430, binding = 1) readonly buffer WBuf { int8_t v[]; } wt;
+layout(std430, binding = 2) readonly buffer BBuf { float v[]; } biasf;
+layout(std430, binding = 3) readonly buffer SBuf { float v[]; } scale;
+layout(std430, binding = 4) writeonly buffer O8 { uvec2 v[]; } out8;
+layout(std430, binding = 5) writeonly buffer O16 { uvec4 v[]; } out16;
+layout(std430, binding = 6) writeonly buffer OF { uint8_t v[]; } outFlow;
+layout(std430, binding = 7) writeonly buffer OM { uint8_t v[]; } outMask;
+
+shared uint shA[128];     // 2 tiles x 16 px x 16 ch int8
+shared int shC[256];
+
+float rndaz(float x) { return x >= 0.0 ? floor(x + 0.5) : ceil(x - 0.5); }
+uint f2h(float f) {   // float -> fp16 bits, round-to-nearest-even (see fg_conv_i8.comp)
+    uint b = floatBitsToUint(f); uint s = (b >> 16) & 0x8000u; int e = int((b >> 23) & 0xffu) - 127 + 15; uint m = b & 0x7fffffu;
+    if (((b >> 23) & 0xffu) == 255u) return s | 0x7c00u | (m != 0u ? 0x200u : 0u);
+    if (e >= 31) return s | 0x7c00u;
+    if (e <= 0) {
+        if (e < -10) return s;
+        m |= 0x800000u; int sh = 14 - e; uint r = m >> sh; uint rem = m & ((1u << sh) - 1u); uint hf = 1u << (sh - 1);
+        if (rem > hf || (rem == hf && (r & 1u) != 0u)) ++r;
+        return s | r;
+    }
+    uint r = (uint(e) << 10) | (m >> 13); uint rem = m & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (r & 1u) != 0u)) ++r;
+    return s | r;
+}
+
+void epilogue(coopmat<int32_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> c, int t, int j, int ox0, int oy, int n0) {
+    coopMatStore(c, shC, 0, 16, gl_CooperativeMatrixLayoutRowMajor);
+    barrier();
+    int l = int(gl_LocalInvocationID.x), p = l >> 1, h = l & 1;
+    int ox = ox0 + t * 16 + p;
+    if (ox < OUT_W) {
+        int ch0 = n0 + j * 16 + h * 8;
+        uint w[4] = uint[4](0u, 0u, 0u, 0u);
+        float fv[8];
+        for (int i = 0; i < 8; ++i) {
+            int ch = ch0 + i;
+            precise float f = fma(scale.v[ch], float(shC[p * 16 + h * 8 + i]), biasf.v[ch]);
+            fv[i] = f;
+        }
+        int pix = oy * OUT_W + ox;
+        if (OUT_MODE == 2) {
+            float lo = RELU != 0 ? float(j == 0 ? FLOW_ZP : MASK_ZP) : 0.0;
+            if (j == 0) {
+                for (int i = 0; i < 8; ++i) {
+                    int ch = h * 8 + i, pos = ch >> 2, k = ch & 3;
+                    float g = min(max(rndaz(fv[i]), lo), 255.0);
+                    outFlow.v[((2 * oy + (pos >> 1)) * FLOW_PITCH + 2 * ox + (pos & 1)) * 4 + k] = uint8_t(uint(g));
+                }
+            } else if (h == 0) {
+                outMask.v[oy * MASK_PITCH + ox] = uint8_t(uint(min(max(rndaz(fv[0]), lo), 255.0)));
+            }
+        } else if (OUT_MODE == 0) {
+            for (int i = 0; i < 8; ++i) {
+                float g = min(max(fv[i], float(LO)), float(HI));
+                uint q = uint(int(rndaz(g)) + OUT_OFF) & 255u;
+                w[i >> 2] |= q << (8 * (i & 3));
+            }
+            out8.v[(pix * OC + ch0) / 8] = uvec2(w[0], w[1]);
+        } else {
+            for (int i = 0; i < 8; i += 2) w[i >> 1] = f2h(max(fv[i], 0.0)) | (f2h(max(fv[i + 1], 0.0)) << 16);
+            out16.v[(pix * OC + ch0) / 8] = uvec4(w[0], w[1], w[2], w[3]);
+        }
+    }
+    barrier();
+}
+
+void main() {
+    int ox0 = int(gl_WorkGroupID.x) * 32, oy = int(gl_WorkGroupID.y), n0 = int(gl_WorkGroupID.z) * 32;
+    int l = int(gl_LocalInvocationID.x), p = l >> 1, h = l & 1;
+    uint padw = uint(PADV & 255) * 0x01010101u;
+    coopmat<int32_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> c00 = coopmat<int32_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0);
+    coopmat<int32_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> c01 = c00, c10 = c00, c11 = c00;
+    coopmat<int8_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> a0, a1;
+    coopmat<int8_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> b0, b1;
+    for (int tap = 0; tap < 9; ++tap) {
+        int ky = tap / 3, kx = tap - ky * 3;
+        int iy = oy * STRIDE + ky - 1;
+        for (int kc = 0; kc < ICW / 16; ++kc) {
+            for (int t = 0; t < 2; ++t) {
+                int ix = (ox0 + t * 16 + p) * STRIDE + kx - 1;
+                uvec2 val = uvec2(padw);
+                if (iy >= 0 && iy < IN_H && ix >= 0 && ix < IN_W) val = inp.v[((iy * IN_W + ix) * INSTRIDE + kc * 16 + h * 8) / 8];
+                shA[t * 64 + p * 4 + h * 2] = val.x; shA[t * 64 + p * 4 + h * 2 + 1] = val.y;
+            }
+            barrier();
+            coopMatLoad(a0, shA, 0, 4, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(a1, shA, 64, 4, gl_CooperativeMatrixLayoutRowMajor);
+            coopMatLoad(b0, wt.v, (n0) * 9 * ICW + tap * ICW + kc * 16, 9 * ICW, gl_CooperativeMatrixLayoutColumnMajor);
+            coopMatLoad(b1, wt.v, (n0 + 16) * 9 * ICW + tap * ICW + kc * 16, 9 * ICW, gl_CooperativeMatrixLayoutColumnMajor);
+            c00 = coopMatMulAdd(a0, b0, c00); c01 = coopMatMulAdd(a0, b1, c01);
+            c10 = coopMatMulAdd(a1, b0, c10); c11 = coopMatMulAdd(a1, b1, c11);
+            barrier();
+        }
+    }
+    epilogue(c00, 0, 0, ox0, oy, n0); epilogue(c01, 0, 1, ox0, oy, n0);
+    epilogue(c10, 1, 0, ox0, oy, n0); epilogue(c11, 1, 1, ox0, oy, n0);
+}

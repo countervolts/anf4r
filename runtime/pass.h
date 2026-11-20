@@ -30,6 +30,7 @@ public:
                 const void* push, uint32_t pushBytes);
 
     std::string label;   // for profiling
+    uint32_t requiredSubgroup = 0;   // set before build(): pin the subgroup size (cooperative-matrix kernels need 32)
     bool hasBinding(uint32_t b) const { return kindOf_.count(b) != 0; }
     uint32_t lx = 1, ly = 1, lz = 1;
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;

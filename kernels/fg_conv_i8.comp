@@ -16,6 +16,7 @@ layout(constant_id = 6) const int OUT_H = 1;
 layout(constant_id = 7) const int OUT_MODE = 0;
 layout(constant_id = 8) const int LO = 0;
 layout(constant_id = 9) const int HI = 127;
+layout(constant_id = 12) const int INSTRIDE = 0;   // input bytes per pixel (0 = IC); IC here counts the (zero padded) weight channels
 layout(constant_id = 11) const int OUT_OFF = 0;   // added after rounding/clamping (SR: LO=0,HI=255,OUT_OFF=-128 -> int8 = uint8-128)
 layout(constant_id = 10) const int PADV = 0;   // value of out-of-bounds input taps: 0 for the first layer (ZERO_PADDING), -128 (0x80) elsewhere
 
@@ -39,7 +40,7 @@ int convAcc(int ox, int oy, int oc) {
                 if (PADV != 0) { int wb = ((oc * 3 + ky) * 3 + kx) * icw; for (int w = 0; w < icw; ++w) { int b = int(wt.v[wb + w]); acc += PADV * (bitfieldExtract(b, 0, 8) + bitfieldExtract(b, 8, 8) + bitfieldExtract(b, 16, 8) + bitfieldExtract(b, 24, 8)); } }
                 continue;
             }
-            int ib = (iy * IN_W + ix) * icw;
+            int ib = (iy * IN_W + ix) * (INSTRIDE == 0 ? icw : INSTRIDE / 4);
             int wb = ((oc * 3 + ky) * 3 + kx) * icw;
             for (int w = 0; w < icw; ++w) {
                 int a = int(inp.v[ib + w]), b = int(wt.v[wb + w]);

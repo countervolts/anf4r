@@ -35,7 +35,7 @@ private:
     struct LW { Buffer w, b, s; };
     std::vector<LW> phaseW_[2];                     // [0] cnn1 per phase, [1] cnn3 per phase
     LW shared_[2];                                  // cnn2-0, cnn2-1
-    Pass pre_, post_, conv_[4];
+    Pass pre_, post_, conv_[4]; bool convWmma_[4] = {};
     VkSampler sBorder_ = VK_NULL_HANDLE, sEdge_ = VK_NULL_HANDLE;
     bool needClear_ = true; uint32_t frame_ = 0;
 };

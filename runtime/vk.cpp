@@ -63,10 +63,12 @@ bool Context::create(bool validation) {
     f13.pNext = &f12; f13.computeFullSubgroups = VK_TRUE; f13.subgroupSizeControl = VK_TRUE; f13.maintenance4 = VK_TRUE;
     VkPhysicalDeviceFeatures2 feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; feat.pNext = &f13;
     feat.features.shaderInt16 = VK_TRUE; feat.features.shaderStorageImageExtendedFormats = VK_TRUE;
-    const char* exts[] = {};
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+    cm.cooperativeMatrix = VK_TRUE; f12.pNext = &cm;
+    const char* exts[] = {"VK_KHR_cooperative_matrix"};
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &feat; dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = 0; dci.ppEnabledExtensionNames = exts;
+    dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = exts;
     if (vkCreateDevice(physical, &dci, nullptr, &device) != VK_SUCCESS) { error = "vkCreateDevice"; return false; }
     ownsDevice = true;
     vkGetDeviceQueue(device, queueFamily, 0, &queue);

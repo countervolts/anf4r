@@ -34,7 +34,7 @@ target_link_libraries(fgnet_test PRIVATE anf4r_rt)
 
 # Compile our own compute kernels to SPIR-V (vendor shaders are used as-is from vendor/assets/spirv).
 find_program(GLSLC glslc REQUIRED)
-set(ANF_KERNELS conv_int8 fg_conv_i8 fg_head_lr fg_head_qr fg_resample sr_pre sr_post sr_resize)
+set(ANF_KERNELS conv_int8 conv_wmma fg_conv_i8 fg_head_lr fg_head_qr fg_resample sr_pre sr_post sr_resize)
 set(ANF_SPV "")
 foreach(k ${ANF_KERNELS})
   add_custom_command(OUTPUT ${CMAKE_SOURCE_DIR}/build/${k}.spv

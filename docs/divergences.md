@@ -98,3 +98,11 @@ fp32 arithmetic where the vendor uses fp16 (`mad.f16`) in the blend. History is 
 **Validation (no ground truth exists):** `tools/sr_demo.py` renders a static-camera Halton-jittered sequence from the SDK hero image and compares with the HR source:
 alignment is exact (best global shift 0,0), **jitter sign convention (x right, y up) is the unique best of the four** (31.4 vs 26-30 dB), PSNR rises monotonically with frames
 (30.0 -> 31.5 dB at 320x180; 32.0 -> 33.2 dB at 640x360 vs 28.4 dB for bicubic of the same LR frames). Deterministic, validation-clean (`tests/check_sr.sh`).
+
+## D7 — performance kernels (no change in results)  [VERIFIED bit-identical]
+`kernels/conv_wmma.comp` computes the same convolutions as `fg_conv_i8.comp` as an implicit GEMM on the RDNA3 matrix units (`VK_KHR_cooperative_matrix`, int8 x int8 -> int32, 16x16x16):
+A (im2col rows) is staged through LDS with the vendor's out-of-bounds value (`PADV`), B is the repacked weights loaded column-major, the epilogue (fma, clamp, rndaz, int8/fp16/uint8 D2S
+store) is the same per-element code. int32 accumulation is order-independent, so the results are identical; verified by `tests/fgnet_test` (all layers incl. the QR head, GPU == CPU reference) and
+by `cmp` of the SR output against the pre-optimisation baseline (also for odd sizes, and with `ANF_NO_WMMA=1` which selects the scalar fallback). The LR head still uses plain fp32 sums in the old order (one
+thread per channel instead of per position: same arithmetic). `sr_pre` uses an LDS tile for the 3x3 depth/MV search; the warped previous colour is no longer written to a 29 MB image but re-derived in
+`sr_post` with the identical `precise` expressions. Pipelines pin subgroup size 32; if the device refuses the cooperative-matrix pipeline the scalar kernels are used.

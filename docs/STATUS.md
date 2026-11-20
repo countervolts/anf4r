@@ -24,3 +24,13 @@ Vulkan-validation cleanliness and quality metrics against ground truth we can sy
 - **Performance**: convs are one-thread-per-output scalar loops; dot4/WMMA tiling would be several times faster.
 - **Unknown host constants** (cannot be recovered without the host code or a device): SR jitter->phase mapping, SR `min/max`, QR head `min/max`, FG `discontinuityThresholdSq`, FG/SR depth conventions.
 - Old `conv_int8.comp` / `model_test` (SR v0) are obsolete (see divergences D1/D5).
+
+## Performance (RX 7700 XT, GPU timestamps, `build/cm/profile sr|fg W H`; results bit-identical to the scalar kernels, divergences D7)
+| | before | now |
+|---|---|---|
+| SR, input 853x480 (Ultra Perf @1440p) | 3.5 ms | 0.47 ms |
+| SR, input 1280x720 (Performance @1440p) | 7.7 ms | 1.19 ms |
+| SR, input 1706x960 (Quality @1440p) | 14.6 ms | 2.2 ms |
+| FG 1920x1080 | 5.5 ms | 1.10 ms |
+| FG 2560x1440 | 9.9 ms | 1.62 ms |
+Left: SR pre/post (about 60% of SR now, bandwidth-bound), FG vendor shaders (0.45 ms @1440p), launch-latency of the 28 small dependent FG layers.
