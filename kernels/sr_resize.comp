@@ -1,0 +1,24 @@
+#version 450
+// anf4r: resample the network's native 2x output to the requested output size (any ratio: DLAA 1x ... Ultra Performance 3x).
+// Catmull-Rom bicubic, 16 taps, edge-clamped; operates in the (linear HDR) output space.
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform texture2D texSrc;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D imgDst;
+layout(push_constant) uniform PC { ivec2 srcSize; ivec2 dstSize; } pc;
+vec4 w4(float t) {   // Catmull-Rom weights for taps -1,0,1,2
+    float t2 = t * t, t3 = t2 * t;
+    return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.dstSize.x || p.y >= pc.dstSize.y) return;
+    vec2 s = (vec2(p) + 0.5) * vec2(pc.srcSize) / vec2(pc.dstSize) - 0.5;
+    ivec2 i0 = ivec2(floor(s)); vec2 f = s - vec2(i0);
+    vec4 wx = w4(f.x), wy = w4(f.y); vec3 acc = vec3(0.0);
+    for (int j = 0; j < 4; ++j) for (int i = 0; i < 4; ++i) {
+        ivec2 q = clamp(i0 + ivec2(i - 1, j - 1), ivec2(0), pc.srcSize - 1);
+        acc += texelFetch(texSrc, q, 0).rgb * (wx[i] * wy[j]);
+    }
+    imageStore(imgDst, p, vec4(max(acc, 0.0), 1.0));
+}

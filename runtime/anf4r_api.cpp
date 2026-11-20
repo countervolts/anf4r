@@ -12,7 +12,8 @@ struct anf4r_context {
     Context ctx;
     std::string dataDir, error;
     std::unique_ptr<SuperRes> sr; int srW = 0, srH = 0; uint32_t outW = 0, outH = 0;   // requested SR output size (any ratio)
-    Texture srOut;                                   // internal HR RGBA16F target
+    Texture srOut, srFinal;                          // internal HR RGBA16F target (2x), and its bicubic resize to outW x outH when ratio != 2
+    Pass srResize;
     std::map<std::pair<VkImage, VkFormat>, Texture> views;   // image views of the caller's images (cached)
     // frame generation
     std::unique_ptr<FrameGen> fg; int fgW = 0, fgH = 0; uint64_t fgFrames = 0;
@@ -46,7 +47,7 @@ void anf4r_destroy(anf4r_context* c) {
     if (c->sr) c->sr->destroy(c->ctx);
     if (c->fg) { c->fg->destroy(c->ctx); c->resample.destroy(c->ctx); }
     for (Texture* t : {&c->fgColor, &c->fgDepth, &c->fgMotion, &c->fgOut, &c->real}) c->ctx.destroyTexture(*t);
-    c->ctx.destroyTexture(c->srOut);
+    c->ctx.destroyTexture(c->srOut); c->ctx.destroyTexture(c->srFinal); c->srResize.destroy(c->ctx);
     for (auto& [k, t] : c->views) c->ctx.destroyTexture(t);
     c->ctx.destroy(); delete c;
 }
@@ -58,12 +59,18 @@ int anf4r_upscale_init(anf4r_context* c, uint32_t ow, uint32_t oh, uint32_t iw, 
     c->outW = ow; c->outH = oh;
     if (c->sr && c->srW == (int)iw && c->srH == (int)ih) return 0;
     vkDeviceWaitIdle(c->ctx.device);
-    if (c->sr) { c->sr->destroy(c->ctx); c->sr.reset(); c->ctx.destroyTexture(c->srOut); }
+    if (c->sr) { c->sr->destroy(c->ctx); c->sr.reset(); c->ctx.destroyTexture(c->srOut); c->ctx.destroyTexture(c->srFinal); c->srResize.destroy(c->ctx); c->srResize = Pass(); }
     SrConfig cfg; cfg.lrW = iw; cfg.lrH = ih; cfg.modelDir = c->dataDir + "/modelzoo/aiff-sr-v2s-prod-7p1-invpow2"; cfg.shaderDir = c->dataDir + "/shaders";
     c->sr = std::make_unique<SuperRes>();
     if (!c->sr->init(c->ctx, cfg)) { c->error = c->ctx.error; c->sr.reset(); return 2; }
     if (!c->ctx.createTexture(c->srOut, VK_FORMAT_R16G16B16A16_SFLOAT, 2 * iw, 2 * ih)) { c->error = "output allocation"; return 3; }
-    { VkCommandBuffer cb = c->ctx.begin(); c->ctx.toLayout(cb, c->srOut, VK_IMAGE_LAYOUT_GENERAL); c->ctx.submit(cb); }
+    if (ow != 2 * iw || oh != 2 * ih) {
+        auto code = readSpirv(c->dataDir + "/shaders/sr_resize.spv");
+        if (code.empty()) { c->error = "missing sr_resize.spv"; return 4; }
+        if (!c->ctx.createTexture(c->srFinal, VK_FORMAT_R16G16B16A16_SFLOAT, ow, oh)) { c->error = "resize target allocation"; return 3; }
+        if (!c->srResize.build(c->ctx, code, {{0, BindKind::SampledImage, "s"}, {1, BindKind::StorageImage, "d"}}, {}, 16, 8, 8, 1, "main")) { c->error = c->ctx.error; return 5; }
+    }
+    { VkCommandBuffer cb = c->ctx.begin(); c->ctx.toLayout(cb, c->srOut, VK_IMAGE_LAYOUT_GENERAL); if (c->srFinal.image) c->ctx.toLayout(cb, c->srFinal, VK_IMAGE_LAYOUT_GENERAL); c->ctx.submit(cb); }
     c->srW = iw; c->srH = ih; return 0;
 }
 
@@ -86,9 +93,15 @@ int anf4r_upscale(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc
     c->ctx.toLayout(cb, out, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit b{}; b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     uint32_t ow = std::min<uint32_t>(c->outW ? c->outW : 2 * iw, d->output.width), oh = std::min<uint32_t>(c->outH ? c->outH : 2 * ih, d->output.height);
-    b.srcOffsets[1] = {(int32_t)(2 * iw), (int32_t)(2 * ih), 1}; b.dstOffsets[1] = {(int32_t)ow, (int32_t)oh, 1};
-    vkCmdBlitImage(cb, c->srOut.image, VK_IMAGE_LAYOUT_GENERAL, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
-                   (ow == 2 * iw && oh == 2 * ih) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+    const Texture* src = &c->srOut;
+    if (c->srFinal.image) {   // ratio != 2: bicubic resize of the native 2x result to the requested size, then a same-size copy/convert
+        struct { int32_t sw, sh, dw, dh; } pc{(int32_t)(2 * iw), (int32_t)(2 * ih), (int32_t)c->srFinal.width, (int32_t)c->srFinal.height};
+        c->srResize.bindImage(0, c->srOut.view); c->srResize.bindImage(1, c->srFinal.view);
+        c->srResize.record(c->ctx, cb, c->srFinal.width, c->srFinal.height, 1, &pc, sizeof pc); c->ctx.barrierAll(cb);
+        src = &c->srFinal;
+    }
+    b.srcOffsets[1] = {(int32_t)std::min<uint32_t>(src->width, ow), (int32_t)std::min<uint32_t>(src->height, oh), 1}; b.dstOffsets[1] = b.srcOffsets[1];
+    vkCmdBlitImage(cb, src->image, VK_IMAGE_LAYOUT_GENERAL, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_NEAREST);
     c->ctx.toLayout(cb, out, back);
     for (int i = 0; i < 3; ++i) { VkImageLayout orig = im[i]->layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_GENERAL : im[i]->layout; c->ctx.toLayout(cb, *tex[i], orig); }
     return 0;

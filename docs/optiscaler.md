@@ -31,6 +31,11 @@ Jitter: the NGX/image-coordinate sample offset (y down) is converted to ANF's y-
 | Device features | the game's device must have `shaderInt8` + `storageBuffer8BitAccess` + `bufferDeviceAddress`; vkd3d-proton under RADV provided them. |
 Known limits: one SR context per size pair, display-resolution MVs unsupported (as in m4r), vkd3d-proton only, depth assumed reverse-Z unless `DepthInverted()` says otherwise.
 
+## Scaling modes
+The ANF network is fixed 2x; every other ratio (DLAA 1x, Quality 1.5x, Balanced 1.7x, Ultra Performance 3x, any custom ratio) runs the network at 2x on the render-size input and
+resamples the result to the requested size with a Catmull-Rom bicubic pass (`kernels/sr_resize.comp`). Harness, 640x360 input, 20 frames (`tests/check_ratios.sh`), PSNR vs the
+reference at the output size / bilinear of the same input: 1x 35.6/30.8 dB, 1.5x 33.7/29.5, 1.7x 33.4/29.3, 2x 32.7/29.0, 3x 33.0/29.2.
+
 ## Ghost of Tsushima (installed 2026-11-19, not yet played)
 `dxgi.dll` is this repo's patched OptiScaler (ANF backend); `anf4r/` (dll + data, 18 MB) sits next to the game executable; `OptiScaler.ini` has
 `Dx12Upscaler = anf`, `FGOutput = anf`, `[ANF] FlipJitter = true` (GoT's raw NGX jitter sign is inverted, as measured with m4r). The previous `dxgi.dll` and ini are in
