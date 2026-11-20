@@ -110,8 +110,11 @@ static void dumpRecord(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale
     if (c->dumpLeft <= 0) return;
     const anf4r_image* im[3] = {&d->color, &d->depth, &d->motion};
     for (int i = 0; i < 3; ++i) {
-        VkDeviceSize need = (VkDeviceSize)im[i]->width * im[i]->height * formatBytes(im[i]->format);
-        if (!formatBytes(im[i]->format)) return;
+        VkFormat f_ = im[i]->format;
+        uint32_t bpp = (f_ == VK_FORMAT_D32_SFLOAT_S8_UINT || f_ == VK_FORMAT_X8_D24_UNORM_PACK32 || f_ == VK_FORMAT_D24_UNORM_S8_UINT || f_ == VK_FORMAT_D32_SFLOAT) ? 4 : f_ == VK_FORMAT_D16_UNORM ? 2 :
+                       (f_ == VK_FORMAT_R16G16_UNORM || f_ == VK_FORMAT_R16G16_SNORM) ? 4 : f_ == VK_FORMAT_R16G16B16A16_UNORM ? 8 : formatBytes(f_);
+        if (!bpp) { std::ofstream e(c->dataDir + "/dump/error.txt", std::ios::app); e << "unsupported format " << (int)f_ << " for input " << i << "\n"; c->dumpLeft = 0; return; }
+        VkDeviceSize need = (VkDeviceSize)im[i]->width * im[i]->height * bpp;
         if (need > c->dumpSize[i] || !c->dumpBuf[i].buffer) { if (c->dumpBuf[i].buffer) c->ctx.destroyBuffer(c->dumpBuf[i]); c->ctx.createBuffer(c->dumpBuf[i], need, true); }
         c->dumpSize[i] = need;
         bool depthFmt = im[i]->format == VK_FORMAT_D32_SFLOAT || im[i]->format == VK_FORMAT_D24_UNORM_S8_UINT || im[i]->format == VK_FORMAT_D32_SFLOAT_S8_UINT || im[i]->format == VK_FORMAT_X8_D24_UNORM_PACK32 || im[i]->format == VK_FORMAT_D16_UNORM;
