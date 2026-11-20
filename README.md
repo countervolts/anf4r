@@ -25,9 +25,6 @@ a bicubic resize to the output size (0.1–0.3 ms).
 
 **Frame generation** (one generated frame, independent of the upscaler mode): **1.61 ms** at 2560×1440.
 
-Not included: OptiScaler's own work, the copy/blit into the game's images, and the optional output stabiliser (about +0.2 ms at 1280×720 input). Before the matrix-unit kernels the same
-Performance case took 7.7 ms and FG 9.9 ms ([docs/STATUS.md](docs/STATUS.md)).
-
 ## Credits and license
 GPL-3.0-only ([LICENSE](LICENSE)). The OptiScaler integration follows [m4r](https://github.com/countervolts/m4r)'s approach and derives its patches from it; OptiScaler is GPL-3.0.
 Qualcomm, Adreno and Snapdragon are trademarks of Qualcomm Incorporated.
