@@ -1,7 +1,7 @@
 // anf4r: minimal Vulkan 1.3 compute context (headless harness + adopt-an-existing-device for OptiScaler).
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
-#include <vulkan/vulkan.h>
+#include "vkfn.h"
 #include <cstdint>
 #include <string>
 #include <vector>

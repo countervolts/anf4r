@@ -68,13 +68,14 @@ bool Pass::build(Context& ctx, const std::vector<uint32_t>& spirv, const std::ve
     }
 
     std::vector<VkDescriptorPoolSize> ps;
-    for (auto& [t, c] : counts) ps.push_back({t, c});
+    for (auto& [t, c] : counts) ps.push_back({t, c * kRing});
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    dpi.maxSets = 1; dpi.poolSizeCount = ps.size(); dpi.pPoolSizes = ps.data();
+    dpi.maxSets = kRing; dpi.poolSizeCount = ps.size(); dpi.pPoolSizes = ps.data();
     if (vkCreateDescriptorPool(ctx.device, &dpi, nullptr, &pool_) != VK_SUCCESS) { ctx.error = "descPool"; return false; }
+    VkDescriptorSetLayout layouts[kRing]; for (auto& l : layouts) l = setLayout;
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = pool_; dai.descriptorSetCount = 1; dai.pSetLayouts = &setLayout;
-    if (vkAllocateDescriptorSets(ctx.device, &dai, &set_) != VK_SUCCESS) { ctx.error = "descSet"; return false; }
+    dai.descriptorPool = pool_; dai.descriptorSetCount = kRing; dai.pSetLayouts = layouts;
+    if (vkAllocateDescriptorSets(ctx.device, &dai, sets_) != VK_SUCCESS) { ctx.error = "descSet"; return false; }
     return true;
 }
 
@@ -84,10 +85,11 @@ void Pass::bindBuffer(uint32_t b, VkBuffer buf, VkDeviceSize off, VkDeviceSize r
 
 void Pass::record(Context& ctx, VkCommandBuffer cb, uint32_t gw, uint32_t gh, uint32_t gz,
                   const void* push, uint32_t pushBytes) {
+    VkDescriptorSet set = sets_[cur_++ % kRing];
     std::vector<VkWriteDescriptorSet> w;
     for (auto& b : binds_) {
         VkWriteDescriptorSet x{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        x.dstSet = set_; x.dstBinding = b.binding; x.descriptorCount = 1; x.descriptorType = vkType(b.kind);
+        x.dstSet = set; x.dstBinding = b.binding; x.descriptorCount = 1; x.descriptorType = vkType(b.kind);
         if (b.kind == BindKind::StorageBuffer || b.kind == BindKind::UniformBuffer) x.pBufferInfo = &bufInfo_[b.binding];
         else if (b.kind == BindKind::Sampler) x.pImageInfo = &sampInfo_[b.binding];
         else x.pImageInfo = &imgInfo_[b.binding];
@@ -95,7 +97,7 @@ void Pass::record(Context& ctx, VkCommandBuffer cb, uint32_t gw, uint32_t gh, ui
     }
     vkUpdateDescriptorSets(ctx.device, w.size(), w.data(), 0, nullptr);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set, 0, nullptr);
     if (push && pushBytes) vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushBytes, push);
     vkCmdDispatch(cb, (gw + lx - 1) / lx, (gh + ly - 1) / ly, (gz + lz - 1) / lz);
 }

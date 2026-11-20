@@ -8,3 +8,4 @@ vendor/libanf.dis
 vendor/strings.txt
 vendor/vulkaninfo.txt
 vendor/vk_gpu0.txt
+external/

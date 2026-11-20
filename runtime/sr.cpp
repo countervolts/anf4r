@@ -31,7 +31,7 @@ int SuperRes::jitterPhase(float jx, float jy, float* qx, float* qy) const {
 }
 
 bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
-    cfg_ = cfg; hrW = cfg.lrW * 2; hrH = cfg.lrH * 2; netW = (cfg.lrW + 1) / 2; netH = (cfg.lrH + 1) / 2;
+    cfg_ = cfg; mvScale[0] = (float)cfg.lrW; mvScale[1] = (float)cfg.lrH; hrW = cfg.lrW * 2; hrH = cfg.lrH * 2; netW = (cfg.lrW + 1) / 2; netH = (cfg.lrH + 1) / 2;
     const SrLayer L[4] = {{"cnn1", 20, 32, 2}, {"cnn2-0", 32, 32, 1}, {"cnn2-1", 32, 32, 1}, {"cnn3", 32, 64, 1}};
     std::string err;
     for (int t = 0; t < 2; ++t) {   // per-jitter layers: cnn1 (t=0) and cnn3 (t=1)
@@ -65,7 +65,7 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
     auto pre = readSpirv(cfg.shaderDir + "/sr_pre.spv"), post = readSpirv(cfg.shaderDir + "/sr_post.spv"), cv = readSpirv(cfg.shaderDir + "/fg_conv_i8.spv");
     if (pre.empty() || post.empty() || cv.empty()) { ctx.error = "missing SR spv in " + cfg.shaderDir; return false; }
     if (!pre_.build(ctx, pre, {B(0,SI,"c"),B(1,SI,"d"),B(2,SI,"mv"),B(3,SI,"pc"),B(4,SI,"pf"),B(5,SM,"s"),B(6,SB,"mi"),B(7,ST,"clr"),B(8,ST,"pw")},
-                    {S(0,cfg.lrW),S(1,cfg.lrH),S(2,cfg.invertDepth?1:0)}, 4, 8, 8, 1, "main")) return false;
+                    {S(0,cfg.lrW),S(1,cfg.lrH)}, 24, 8, 8, 1, "main")) return false;
     pre_.bindSampler(5, sBorder_);
     if (!post_.build(ctx, post, {B(0,SI,"c"),B(1,SI,"pw"),B(2,SB,"net"),B(3,SM,"s"),B(4,ST,"hist"),B(5,ST,"feat"),B(6,ST,"out")},
                      {S(0,cfg.lrW),S(1,cfg.lrH),S(2,netW)}, 16, 8, 8, 1, "main")) return false;
@@ -83,6 +83,7 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
 
 bool SuperRes::record(Context& ctx, VkCommandBuffer cb, const Texture& color, const Texture& depth, const Texture& motion, const Texture& output, float jx, float jy) {
     const int c = frame_ & 1, p = c ^ 1;
+    ctx.barrierAll(cb);   // order against the previous frame's commands (submission order)
     if (needClear_) {
         VkClearColorValue z{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         for (Texture* t : {&histColor[0], &histColor[1], &histFeat[0], &histFeat[1]}) vkCmdClearColorImage(cb, t->image, VK_IMAGE_LAYOUT_GENERAL, &z, 1, &r);
@@ -92,7 +93,8 @@ bool SuperRes::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
     // 1. preprocess (grid = LR)
     pre_.bindImage(0, color.view); pre_.bindImage(1, depth.view); pre_.bindImage(2, motion.view); pre_.bindImage(3, histColor[p].view); pre_.bindImage(4, histFeat[p].view);
     pre_.bindBuffer(6, modelIn.buffer); pre_.bindImage(7, colorLR.view); pre_.bindImage(8, prevWarped.view);
-    pre_.record(ctx, cb, cfg_.lrW, cfg_.lrH, 1, &cfg_.preExposure, 4); ctx.barrierAll(cb);
+    struct { float pre, pad0, mvx, mvy; int inv; float pad1; } pcp{cfg_.preExposure, 0.f, mvScale[0], mvScale[1], cfg_.invertDepth ? 1 : 0, 0.f};   // std430 push layout (vec2 @ 8)
+    pre_.record(ctx, cb, cfg_.lrW, cfg_.lrH, 1, &pcp, 24); ctx.barrierAll(cb);
     // 2. network: cnn1(phase) -> cnn2-0 -> cnn2-1 -> cnn3(phase)
     const LW* lw[4] = {&phaseW_[0][ph], &shared_[0], &shared_[1], &phaseW_[1][ph]};
     const int ocs[4] = {32, 32, 32, 64};

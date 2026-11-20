@@ -37,7 +37,9 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet set_ = VK_NULL_HANDLE;
+    static constexpr uint32_t kRing = 8;          // descriptor sets cycled per record() so frames in flight never share one
+    VkDescriptorSet sets_[kRing] = {};
+    uint32_t cur_ = 0;
     std::vector<BindDesc> binds_;
     std::map<uint32_t, VkDescriptorImageInfo> imgInfo_;
     std::map<uint32_t, VkDescriptorImageInfo> sampInfo_;

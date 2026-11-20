@@ -6,7 +6,6 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(constant_id = 0) const int LR_W = 1;
 layout(constant_id = 1) const int LR_H = 1;
-layout(constant_id = 2) const int DEPTH_INVERT = 0;   // 1: forward-Z input (nearer = smaller) -> use 1-d so that max == nearest
 
 layout(set = 0, binding = 0) uniform texture2D texColor;       // LR linear HDR colour (any float format; R11G11B10 decoded by HW)
 layout(set = 0, binding = 1) uniform texture2D texDepth;       // LR depth, fp32, reverse-Z (larger = nearer)
@@ -17,7 +16,7 @@ layout(set = 0, binding = 5) uniform sampler sampBorder;       // linear, clamp-
 layout(std430, binding = 6) writeonly buffer ModelIn { uint v[]; } mi;   // 5 words / pixel (20 B)
 layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D imgColorLR;   // unpacked (tonemapped) LR colour
 layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D imgPrevWarped; // warped previous HR colour (HR size)
-layout(push_constant) uniform PC { float preExposure; } pc;
+layout(push_constant) uniform PC { float preExposure; vec2 mvScale; int depthInvert; } pc;   // mvScale: texture value -> LR pixels (curr - prev); depthInvert: forward-Z input
 
 float rndaz(float x) { return x >= 0.0 ? floor(x + 0.5) : ceil(x - 0.5); }
 uint q8(float v) { return uint(clamp(rndaz(v * 255.0), 0.0, 255.0)) ^ 128u; }   // uint8 - 128 stored as int8 byte
@@ -27,16 +26,17 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= LR_W || p.y >= LR_H) return;
     vec3 col = tonemap(texelFetch(texColor, p, 0).rgb);
-    float dC = texelFetch(texDepth, p, 0).r; if (DEPTH_INVERT != 0) dC = 1.0 - dC;
+    float dC = texelFetch(texDepth, p, 0).r; if (pc.depthInvert != 0) dC = 1.0 - dC;
     // 3x3 max depth (strict >, row-major scan), out-of-frame = -1 (matches mm_find_max_depth_index)
     float best = -2.0; vec2 bestMV = vec2(0.0); bool first = true;
     for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
         ivec2 q = p + ivec2(dx, dy); float d = -1.0; vec2 mv = vec2(0.0);
-        if (q.x >= 0 && q.y >= 0 && q.x < LR_W && q.y < LR_H) { d = texelFetch(texDepth, q, 0).r; if (DEPTH_INVERT != 0) d = 1.0 - d; mv = texelFetch(texMV, q, 0).rg; }
+        if (q.x >= 0 && q.y >= 0 && q.x < LR_W && q.y < LR_H) { d = texelFetch(texDepth, q, 0).r; if (pc.depthInvert != 0) d = 1.0 - d; mv = texelFetch(texMV, q, 0).rg; }
         if (first || d > best) { best = d; bestMV = mv; first = false; }
     }
-    vec2 fm = bestMV * vec2(float(LR_W) * -1.0, float(LR_H) * 1.0);   // MV_SCALE_X = -1, MV_SCALE_Y = +1
-    vec2 uv0 = vec2(2.0 * float(p.x) + 2.0 * fm.x + 0.5, 2.0 * float(p.y) - 2.0 * fm.y + 0.5);
+    // vendor: fm = mv_uv * (W*-1, H*+1); sample = (2x + 2fm.x + .5, 2y - 2fm.y + .5)  ==  2*(pos - mv_uv*size) + .5 on both axes
+    vec2 mvPx = bestMV * pc.mvScale;                                   // curr - prev, LR pixels
+    vec2 uv0 = vec2(2.0 * float(p.x) - 2.0 * mvPx.x + 0.5, 2.0 * float(p.y) - 2.0 * mvPx.y + 0.5);
     vec2 hrSize = vec2(2.0 * float(LR_W), 2.0 * float(LR_H));
     vec4 S[4]; float F[4];
     for (int k = 0; k < 4; ++k) {

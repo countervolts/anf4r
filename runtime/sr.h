@@ -19,10 +19,12 @@ public:
     bool init(Context& ctx, const SrConfig& cfg);
     void destroy(Context& ctx);
     void reset() { needClear_ = true; }
+    void setDepthInverted(bool inv) { cfg_.invertDepth = inv; }
     // color: LR linear HDR (sampled), depth: LR fp32 reverse-Z, motion: LR rg (uv units, jitter-free),
     // output: HR RGBA16F storage image (2*lrW x 2*lrH). All GENERAL layout. jitter in [-0.5,0.5] LR px (ANF convention).
     bool record(Context& ctx, VkCommandBuffer cb, const Texture& color, const Texture& depth, const Texture& motion,
                 const Texture& output, float jitterX, float jitterY);
+    float mvScale[2] = {0, 0};                      // set before record(): motion texture value -> LR pixels (curr - prev); default = uv units (lrW, lrH)
     int netW = 0, netH = 0, hrW = 0, hrH = 0;
     int jitterPhase(float jx, float jy, float* qx, float* qy) const;
     Buffer modelIn;

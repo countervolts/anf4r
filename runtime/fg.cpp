@@ -91,6 +91,7 @@ bool FrameGen::init(Context& ctx, const FgConfig& cfg) {
 bool FrameGen::record(Context& ctx, VkCommandBuffer cb, const Texture& color, const Texture& depth, const Texture& motion, const Texture& output) {
     const int c = frame_ & 1, p = c ^ 1; const bool first = frame_ == 0;
     const int PW = sz.preW, PH = sz.preH;
+    ctx.barrierAll(cb);   // order against the previous frame's commands (submission order)
     // per-frame state
     vkCmdFillBuffer(cb, packedX.buffer, 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(cb, packedY.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cb, fallback.buffer, 0, VK_WHOLE_SIZE, 0);
