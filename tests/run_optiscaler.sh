@@ -14,15 +14,17 @@ rm -rf "$APP"; mkdir -p "$APP/out" "$COMPAT"
 cp -f "$HARNESS" "$APP/d3d12_harness.exe"; cp -f "$OPTI" "$APP/dxgi.dll"
 python3 "$ROOT/scripts/install_anf.py" --out "$APP" >/dev/null
 ln -s "$FIX" "$APP/fixture"
+FGEN=false; FGIN=nofg; FGOUT=nofg
+if [[ -n "${ANF_FG:-}" ]]; then FGEN=true; FGIN=upscaler; FGOUT=anf; export M4R_HARNESS_SWAPCHAIN=1; fi   # ANF_FG=1: also ANF frame generation (needs > 14 frames)
 cat > "$APP/OptiScaler.ini" <<EOF
 [Upscalers]
 Dx12Upscaler=anf
 [ANF]
 FlipJitter=${ANF_FLIP_JITTER:-false}
 [FrameGen]
-Enabled=false
-FGInput=nofg
-FGOutput=nofg
+Enabled=$FGEN
+FGInput=$FGIN
+FGOutput=$FGOUT
 [Spoofing]
 Dxgi=false
 [Plugins]

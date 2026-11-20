@@ -9,7 +9,7 @@
 #define ANF4R_VK_INSTANCE_FUNCS(X) X(vkCreateDevice) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceMemoryProperties) \
     X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkDestroyInstance) X(vkGetDeviceProcAddr)
 #define ANF4R_VK_DEVICE_FUNCS(X) X(vkAllocateCommandBuffers) X(vkAllocateDescriptorSets) X(vkAllocateMemory) X(vkBeginCommandBuffer) \
-    X(vkBindBufferMemory) X(vkBindImageMemory) X(vkCmdBindDescriptorSets) X(vkCmdBindPipeline) X(vkCmdBlitImage) X(vkCmdClearColorImage) \
+    X(vkBindBufferMemory) X(vkBindImageMemory) X(vkCmdBindDescriptorSets) X(vkCmdBindPipeline) X(vkCmdBlitImage) X(vkCmdClearColorImage) X(vkCmdCopyBuffer) \
     X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) X(vkCmdCopyImageToBuffer) X(vkCmdDispatch) X(vkCmdFillBuffer) X(vkCmdPipelineBarrier) \
     X(vkCmdPushConstants) X(vkCmdUpdateBuffer) X(vkCreateBuffer) X(vkCreateCommandPool) X(vkCreateComputePipelines) X(vkCreateDescriptorPool) \
     X(vkCreateDescriptorSetLayout) X(vkCreateFence) X(vkCreateImage) X(vkCreateImageView) X(vkCreatePipelineLayout) X(vkCreateSampler) \

@@ -17,8 +17,9 @@ Vulkan-validation cleanliness and quality metrics against ground truth we can sy
 6. **OptiScaler + vkd3d-proton (SR)** — `patches/optiscaler/0001-anf-upscaler.patch` (patch only), `anf4r.dll` (MinGW), `tests/run_optiscaler.sh`; in m4r's D3D12 harness under Proton:
    26.76 dB vs reference (bilinear 21.89), 2.7 ms/frame at 640x360->1280x720. See docs/optiscaler.md. VERIFIED in the harness; not tried in a game.
 
+7. **FG through OptiScaler** — patch 0002 + `anf4r_framegen_*`; harness: 2 presents/frame, real frame restored exactly, 29.5 dB vs true mid-frame. VERIFIED in the harness.
+
 ## Not done
-- **FG through OptiScaler**: C API stubs only (needs FULL-size depth/MV resampling and a present-time hook like m4r's patch 0002).
 - **Per-frame descriptor sets**: `Pass` rewrites one descriptor set per `record()`; fine for submit-and-wait, must become per-frame ring for in-flight frames.
 - **Performance**: convs are one-thread-per-output scalar loops; dot4/WMMA tiling would be several times faster.
 - **Unknown host constants** (cannot be recovered without the host code or a device): SR jitter->phase mapping, SR `min/max`, QR head `min/max`, FG `discontinuityThresholdSq`, FG/SR depth conventions.

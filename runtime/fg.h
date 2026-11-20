@@ -26,6 +26,7 @@ public:
     bool init(Context& ctx, const FgConfig& cfg);
     void destroy(Context& ctx);
     void reset() { frame_ = 0; }
+    void setDepthInverted(bool v) { cfg_.invertDepth = v; }
     // Records the full interpolation of (previous frame, this frame) into cb. color: RGBA8, depth: R32F, motion: RG16F,
     // output: RGBA8 storage image. All must be in GENERAL layout; sizes == cfg.width x cfg.height.
     bool record(Context& ctx, VkCommandBuffer cb, const Texture& color, const Texture& depth, const Texture& motion, const Texture& output);

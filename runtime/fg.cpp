@@ -95,8 +95,9 @@ bool FrameGen::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
     // per-frame state
     vkCmdFillBuffer(cb, packedX.buffer, 0, VK_WHOLE_SIZE, 0); vkCmdFillBuffer(cb, packedY.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cb, fallback.buffer, 0, VK_WHOLE_SIZE, 0);
-    uint32_t ds[4] = {0, 0x3f800000u, 0x7f800000u, 0};   // [0..1] min/max (norm-depth path), [2..3] tile accumulators
-    vkCmdUpdateBuffer(cb, depthStats.buffer, 0, 16, ds);
+    // depthStats: [0..1] = previous frame's min/max (read by the norm-depth path), [2..3] = this frame's accumulators (min=+inf bits, max=0)
+    uint32_t ds[4] = {0, 0x3f800000u, 0x7f800000u, 0};
+    if (frame_ == 0) vkCmdUpdateBuffer(cb, depthStats.buffer, 0, 16, ds); else vkCmdUpdateBuffer(cb, depthStats.buffer, 8, 8, ds + 2);
     ctx.barrierAll(cb);
 
     // 1. PreprocessFused (grid = QR)
@@ -151,6 +152,7 @@ bool FrameGen::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
     // history: this colour becomes next frame's prior
     { VkImageCopy r{}; r.srcSubresource = r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; r.extent = {color.width, color.height, 1};
       vkCmdCopyImage(cb, color.image, VK_IMAGE_LAYOUT_GENERAL, prior.image, VK_IMAGE_LAYOUT_GENERAL, 1, &r); ctx.barrierAll(cb); }
+    { VkBufferCopy bc{8, 0, 8}; vkCmdCopyBuffer(cb, depthStats.buffer, depthStats.buffer, 1, &bc); ctx.barrierAll(cb); }   // this frame's min/max -> next frame's normalisation
     ++frame_;
     return true;
 }

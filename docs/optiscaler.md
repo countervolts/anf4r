@@ -1,6 +1,6 @@
 # ANF in OptiScaler
 
-The repo carries **only a patch** (`patches/optiscaler/0001-anf-upscaler.patch`), not OptiScaler. It is made against OptiScaler commit `fd3a45a`
+The repo carries **only a patch** (`patches/optiscaler/0001-anf-upscaler.patch` and `0002-anf-frame-generation.patch`), not OptiScaler. It is made against OptiScaler commit `fd3a45a`
 ("Display asi's version") and adds `Upscaler::ANF` (`Dx12Upscaler=anf`), an NGX D3D12 feature built on vkd3d-proton's Vulkan interop, a `[ANF] FlipJitter`
 ini key, the dropdown entry and a loader for `anf4r\\anf4r.dll`. It is derived mechanically from m4r's MetalFX patch by `scripts/make_optiscaler_patch.py`
 (rename MetalFX/m4r -> ANF/anf4r, data dir `anf4r\\data`, swap in `runtime/anf4r.h`), so it tracks m4r's integration approach.
@@ -27,6 +27,6 @@ Jitter: the NGX/image-coordinate sample offset (y down) is converted to ANF's y-
 | | |
 |---|---|
 | SR through OptiScaler under Proton (GE-Proton10-34, RX 7700 XT) | **works** in m4r's harness: 640x360 -> 1280x720, 8 frames, **26.76 dB** vs the supersampled reference (bilinear 21.89 dB; with `FlipJitter=true` 21.23 dB, so the conversion is right), 2.7 ms per frame including submit and wait. Not tried in a game. |
-| Frame generation | **not wired** (`anf4r_interpolate*` / `framegen_*` return an error). `FrameGen` exists and works standalone; it needs FULL-size depth/MV (ANF requirement) while OptiScaler supplies render-size ones, so an up-sampling step is needed. |
+| Frame generation (`FGOutput=anf`, `FGInput=upscaler`) | **works in the harness** (`ANF_FG=1 tests/run_optiscaler.sh`, 20 frames, swapchain): from the first active frame every present becomes two, the real frame is put back bit-exactly, generated frames are 29.5 dB vs the true in-between frame (repeat-current 27.8 dB, plain average 30.3 dB; hero fixture `tools/make_hero_fixture.py`, 2 px/frame pan). `anf4r_framegen_capture` copies the backbuffer, up-samples OptiScaler's render-size depth/MV to FULL size (`kernels/fg_resample.comp`), runs `FrameGen`, blits the result into the backbuffer; `restore` writes the real frame back. The scene-cut guard of the vendor blend (luma difference) makes fast motion pass through unmodified. |
 | Device features | the game's device must have `shaderInt8` + `storageBuffer8BitAccess` + `bufferDeviceAddress`; vkd3d-proton under RADV provided them. |
 Known limits: one SR context per size pair, display-resolution MVs unsupported (as in m4r), vkd3d-proton only, depth assumed reverse-Z unless `DepthInverted()` says otherwise.

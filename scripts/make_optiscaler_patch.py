@@ -1,55 +1,45 @@
 #!/usr/bin/env python3
-"""Derives patches/optiscaler/0001-anf-upscaler.patch from m4r's MetalFX upscaler patch (same OptiScaler commit fd3a45a):
-applies m4r's patch to a clean checkout, renames MetalFX/m4r -> ANF/anf4r, swaps in anf4r.h, and records the diff.
-usage: make_optiscaler_patch.py <clean OptiScaler checkout at fd3a45a> <m4r checkout> """
-import os, re, subprocess, sys, shutil
-import tempfile
+"""Derives patches/optiscaler/0001-anf-upscaler.patch and 0002-anf-frame-generation.patch from m4r's MetalFX patches (same OptiScaler
+commit fd3a45a): applies them to a scratch clone, renames MetalFX/m4r -> ANF/anf4r (contents and paths), swaps in runtime/anf4r.h, records the diffs.
+usage: make_optiscaler_patch.py <OptiScaler git checkout at fd3a45a (read only)> <m4r checkout>"""
+import os, shutil, subprocess, sys, tempfile
 src, m4r = os.path.realpath(sys.argv[1]), os.path.realpath(sys.argv[2])
-_tmp = tempfile.mkdtemp(prefix='anf-opti-')
-subprocess.run(['git', 'clone', '-q', src, _tmp + '/o'], check=True, capture_output=True)   # work on a scratch clone; the build tree is untouched
-opti = _tmp + '/o'
 here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-def git(*a, check=True): return subprocess.run(['git', '-C', opti, *a], check=check, capture_output=True, text=True)
-git('checkout', '-q', 'fd3a45a')
-assert git('status', '--porcelain').stdout.strip() == ''
-git('apply', os.path.join(m4r, 'patches/optiscaler/0001-metalfx-upscaler.patch'))
-subs = [('MetalFXFeatureDx12', 'ANFFeatureDx12'), ('MetalFXFlipJitter', 'ANFFlipJitter'), ('MetalFX', 'ANF'), ('metalfx', 'anf'),
-        ('M4RProxy', 'ANFProxy'), ('M4RD3D12', 'ANFD3D12'), ('M4R_', 'ANF_'), ('m4r_', 'anf4r_'), ('M4R', 'ANF4R'), ('m4r', 'anf4r')]
-changed = git('status', '--porcelain').stdout.splitlines()
-files = []
-for l in changed:
-    p = l[3:].strip()
-    if p.endswith('/'):
-        for r, _, fs in os.walk(os.path.join(opti, p)): files += [os.path.relpath(os.path.join(r, f), opti) for f in fs]
-    else: files.append(p)
-for f in files:
-    path = os.path.join(opti, f)
-    if os.path.basename(f) == 'm4r.h': continue                      # replaced below
-    s = open(path, newline='').read()
+subs = [('MetalFXFlipJitter', 'ANFFlipJitter'), ('MetalFX', 'ANF'), ('metalfx', 'anf'), ('M4RProxy', 'ANFProxy'), ('M4RD3D12', 'ANFD3D12'),
+        ('M4R_', 'ANF_'), ('m4r_', 'anf4r_'), ('M4R', 'ANF4R'), ('m4r', 'anf4r')]
+def fix(s):
     for a, b in subs: s = s.replace(a, b)
-    s = s.replace('\\plans', '\\data').replace('Apple ANF', 'Qualcomm ANF').replace('Apple anf', 'Qualcomm ANF')
-    s = s.replace("prepare it with anf4r's install script for", "install the ANF data with scripts/install_anf.py; init failed for")
-    s = s.replace('"{} (install the ANF data with scripts/install_anf.py; init failed for {}x{} -> {}x{})"', '"{} (ANF SR is fixed 2.0x; init failed for {}x{} -> {}x{})"')
-    open(path, 'w', newline='').write(s)
-# renames
-d = os.path.join(opti, 'OptiScaler/upscalers')
-os.rename(os.path.join(d, 'metalfx'), os.path.join(d, 'anf'))
-for old, new in [('M4R_D3D12.h', 'ANF_D3D12.h'), ('M4R_Proxy.h', 'ANF_Proxy.h'), ('MetalFXFeature_Dx12.cpp', 'ANFFeature_Dx12.cpp'), ('MetalFXFeature_Dx12.h', 'ANFFeature_Dx12.h')]:
-    os.rename(os.path.join(d, 'anf', old), os.path.join(d, 'anf', new))
-os.remove(os.path.join(d, 'anf', 'm4r.h'))
-shutil.copy(os.path.join(here, 'runtime/anf4r.h'), os.path.join(d, 'anf', 'anf4r.h'))
-# paths inside the vcxproj/includes refer to the old names
-for r, _, fs in os.walk(opti):
+    return (s.replace('\\plans', '\\data').replace('Apple ANF', 'Qualcomm ANF').replace('Apple anf', 'Qualcomm ANF')
+             .replace("prepare it with anf4r's install script for", "install the ANF data with scripts/install_anf.py; init failed for"))
+def git(d, *a): return subprocess.run(['git', '-C', d, *a], check=True, capture_output=True, text=True).stdout
+def build(patches):
+    tmp = tempfile.mkdtemp(prefix='anf-opti-'); d = tmp + '/o'
+    subprocess.run(['git', 'clone', '-q', src, d], check=True, capture_output=True); git(d, 'checkout', '-q', 'fd3a45a')
+    for p in patches: git(d, 'apply', os.path.join(m4r, 'patches/optiscaler', p))
+    files = []
+    for l in git(d, 'status', '--porcelain', '-uall').splitlines(): files.append(l[3:].strip())
+    for f in files:
+        p = os.path.join(d, f)
+        if os.path.basename(f) == 'm4r.h': continue
+        s = open(p, newline='').read(); open(p, 'w', newline='').write(fix(s))
+    for f in files:   # rename paths
+        nf = fix(f)
+        if nf != f:
+            os.makedirs(os.path.dirname(os.path.join(d, nf)), exist_ok=True); shutil.move(os.path.join(d, f), os.path.join(d, nf))
+    shutil.copy(os.path.join(here, 'runtime/anf4r.h'), os.path.join(d, 'OptiScaler/upscalers/anf/anf4r.h'))
+    for dirpath, dirs, fs in os.walk(os.path.join(d, 'OptiScaler')):   # remove emptied dirs
+        pass
+    return tmp, d
+t1, d1 = build(['0001-metalfx-upscaler.patch'])
+git(d1, 'add', '-A')
+open(os.path.join(here, 'patches/optiscaler/0001-anf-upscaler.patch'), 'w', newline='').write(git(d1, 'diff', '--cached', '--binary'))
+git(d1, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-qm', 'p1')
+t2, d2 = build(['0001-metalfx-upscaler.patch', '0002-metalfx-frame-generation.patch'])
+for r, ds, fs in os.walk(d2):
     if '.git' in r.split(os.sep): continue
     for f in fs:
-        if f.endswith(('.h', '.cpp', '.vcxproj', '.ini', '.txt', '.md')):
-            p = os.path.join(r, f)
-            try: s = open(p, newline='').read()
-            except Exception: continue
-            t = s.replace('upscalers\\metalfx\\', 'upscalers\\anf\\').replace('upscalers/metalfx/', 'upscalers/anf/').replace('MetalFXFeature_Dx12', 'ANFFeature_Dx12').replace('M4R_D3D12', 'ANF_D3D12').replace('M4R_Proxy', 'ANF_Proxy').replace('"m4r.h"', '"anf4r.h"').replace('m4r.h', 'anf4r.h')
-            if t != s: open(p, 'w', newline='').write(t)
-git('add', '-A')
-out = git('diff', '--cached', '--binary').stdout
-open(os.path.join(here, 'patches/optiscaler/0001-anf-upscaler.patch'), 'w', newline='').write(out)
-shutil.rmtree(_tmp)
-print('wrote patches/optiscaler/0001-anf-upscaler.patch', len(out.splitlines()), 'lines')
+        s = os.path.join(r, f); t = os.path.join(d1, os.path.relpath(s, d2)); os.makedirs(os.path.dirname(t), exist_ok=True); shutil.copy2(s, t, follow_symlinks=False)
+git(d1, 'add', '-A')
+open(os.path.join(here, 'patches/optiscaler/0002-anf-frame-generation.patch'), 'w', newline='').write(git(d1, 'diff', '--cached', '--binary'))
+shutil.rmtree(t1); shutil.rmtree(t2)
+print('wrote patches/optiscaler/0001-anf-upscaler.patch, 0002-anf-frame-generation.patch')
