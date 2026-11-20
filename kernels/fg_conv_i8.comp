@@ -16,6 +16,7 @@ layout(constant_id = 6) const int OUT_H = 1;
 layout(constant_id = 7) const int OUT_MODE = 0;
 layout(constant_id = 8) const int LO = 0;
 layout(constant_id = 9) const int HI = 127;
+layout(constant_id = 10) const int PADV = 0;   // value of out-of-bounds input taps: 0 for the first layer (ZERO_PADDING), -128 (0x80) elsewhere
 
 layout(std430, binding = 0) readonly buffer InBuf { uint v[]; } inp;       // int8 words
 layout(std430, binding = 1) readonly buffer WBuf  { uint v[]; } wt;        // int8 words [oc][3][3][ic]
@@ -31,10 +32,12 @@ int convAcc(int ox, int oy, int oc) {
     int icw = IC / 4;
     for (int ky = 0; ky < 3; ++ky) {
         int iy = oy * STRIDE + ky - 1;
-        if (iy < 0 || iy >= IN_H) continue;
         for (int kx = 0; kx < 3; ++kx) {
             int ix = ox * STRIDE + kx - 1;
-            if (ix < 0 || ix >= IN_W) continue;
+            if (iy < 0 || iy >= IN_H || ix < 0 || ix >= IN_W) {
+                if (PADV != 0) { int wb = ((oc * 3 + ky) * 3 + kx) * icw; for (int w = 0; w < icw; ++w) { int b = int(wt.v[wb + w]); acc += PADV * (bitfieldExtract(b, 0, 8) + bitfieldExtract(b, 8, 8) + bitfieldExtract(b, 16, 8) + bitfieldExtract(b, 24, 8)); } }
+                continue;
+            }
             int ib = (iy * IN_W + ix) * icw;
             int wb = ((oc * 3 + ky) * 3 + kx) * icw;
             for (int w = 0; w < icw; ++w) {

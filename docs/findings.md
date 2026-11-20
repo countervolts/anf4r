@@ -207,3 +207,14 @@ Pushing the trace further revealed ANF's per-chip gating and the SR kernel layou
 `CreateTechnique`, and (with static analysis) yielded the SR resource contract, build defines and kernel arg layout.
 The one thing still missing for bit-exact SR — the exact per-channel byte packing of the 20-channel input — remains in
 Adreno asm; completing it needs either the deadlock resolved (real arm64 Linux/Android, not qemu-user) or a device.
+
+## FG end-to-end (2026-11-19)
+Resolution chain and tensor layouts, all VERIFIED from the cross-compiled vendor shaders (`spirv-cross` -> `build/glsl/*.comp`):
+- FULL -> QR (= FULL/2, PyramidDownscale 2x2) -> LR (= QR/4). QR net input = QR res (32 B/texel: 29 channels + 3 zero), LR net input = LR res (32 B/texel).
+  Each net: two stride-2 convs, then depth-to-space x2 on the head. QR flow = FULL/4, QR mask = FULL/8; LR flow = QR/8, LR mask = QR/16.
+- LR input channels (MetaAndLRPack): 0-2 prev YUV, 3 prev depth, 4-6 curr YUV, 7 curr depth, 8-11 depth neighbours, 12 hole mask, 13-16 fwd/bwd MV (0.5 px steps at PREPROCESS res), 17 depth-derived.
+- Network input/output tensors are NHWC int8 (`modeBias=0` signed, `128` unsigned). `bufFallbackStats = {sum|dluma|, #|MV|>32px}`.
+- Flow units: final flow px (FULL) = `(QRres*16384 + LRtex*64)/32`; `LRtex = h_fp16*256`.
+- ANF **requant semantics are readable** in the OpenCL sources: `fma(scale,acc,bias)`, clamp, `rndaz`; INV_POW2 = `mad.s24 >> 16`. Activation domain is `uint8-128` (see divergences D2).
+- Other FG kernels in `Kernels_Hawi`: `Conv2D_64_3_3_20_Relu_mixed.cl` (LR head, fp16), `Conv2D_96_3_3_64_Relu_int8.cl` (LR conv_out), `Conv2D_32_3_3_20_Relu_int8.cl` (QR head).
+- Result: FG runs end to end on RDNA3 with Qualcomm's real weights; see `tests/check_fg.sh`.

@@ -4,7 +4,13 @@ Every re-implemented or transformed kernel is logged here with its reason and th
 results (or an honest note that it may not). The vendor's Vulkan SPIR-V passes (12 `AIFF*_cs`) and all weights run
 **unchanged**; the items below are the pieces that had no RDNA3-runnable vendor form.
 
-## D1 — int8 convolution (`kernels/conv_int8.comp`)  [reconstructed]
+> **Correction to D1 (2026-11-19, VERIFIED from the readable parts of `Kernels_Hawi/*.cl`):** the Adreno requant is
+> `f = mad.f32(scale, float(acc), bias_f)`, clamp to `[min,max]` (kernel args), **`rndaz`** (round, ties away from zero), convert
+> to int — *not* `convert_char_sat` truncation. For `INV_POW2` it is an integer `mad.s24(scale_i, acc, bias_i)` followed by
+> taking the high half (`>>16`, floor). The SR conv (`conv_int8.comp`) still uses truncation and `ReLU = max(f,0)`; it must be redone
+> against this (and the offset-domain finding in D2) before SR output can be trusted. FG already uses the corrected semantics.
+
+## D1 — int8 convolution (`kernels/conv_int8.comp`)  [reconstructed; SUPERSEDED for rounding, see correction above]
 **Why:** ANF's convolutions exist only as Adreno machine code (QASM inline asm in `Kernels_Hawi/*.cl`, precompiled
 Adreno OpenCL binaries, and ARM data-graph caches). None runs on RDNA3. The network *weights, biases, per-channel
 scales and architecture* are used **unchanged** (`vendor/assets/modelzoo/...`); only the conv *execution* is ours.
@@ -29,3 +35,42 @@ rare exact-half cases, and zero for the invpow2 model except at the convert step
 
 **Validation:** `tests/conv_test.cpp` — GPU kernel vs independent CPU reference, bit-exact (0 mismatches) on real
 extracted weights for cnn1 (20→32 s2), cnn2-0, cnn2-1 (32→32 s1), cnn3 (32→64 s1), both invpow2 and float-scale.
+
+## D2 — FG int8 convolution + heads (`kernels/fg_conv_i8.comp`, `fg_head_lr.comp`, `fg_head_qr.comp`)  [reconstructed]
+**Why:** same as D1 — FG convs exist only as Adreno asm / precompiled binaries. Weights, biases, scales and topology are the vendor's.
+**Semantics, each VERIFIED against the readable parts of the vendor kernels or the data:**
+- *Activation domain.* Hidden activations are `uint8 - 128` stored as int8. Evidence: layer-0 `bias*scale == -128` for every channel;
+  layers >=1 have `bias ~ 128*sum(w)` (corr 0.97-1.0, slope 104-150) = input zero-point folded into the bias; `Conv2D_*` use pad `0x80808080`.
+  So **ReLU is the clamp at -128** (`LO=-128, HI=127`), and **out-of-bounds taps read -128, not 0** — except the first layer (`ZERO_PADDING`, pad 0,
+  input is true signed int8) and the fp16 head (real zero). Getting these two wrong made the nets output garbage; with them, static frames
+  reproduce the input at 57 dB.
+- *Requant:* `scale[oc] = weights_scales*input_activation_scale/output_activation_scale`, `bias_f = float(bias_i32)*scale`,
+  `f = fma(scale, float(acc), bias_f)`, clamp, **round half away from zero** (`rndaz`; ASSUMED = OpenCL `round`, ties only), int8 store.
+  Whether the host passes exactly `bias_i32*scale` as the float bias (vs rounding differently) is ASSUMED. fma vs mul+add rounding on Adreno unknown.
+- *LR `conv_out`* (int8 -> fp16): `relu((acc+bias)*ws*ias)` stored as fp16, **round-to-nearest-even implemented explicitly** (RADV `packHalf2x16` truncates).
+- *LR head* (`conv_out_flow_mask`, fp16): fp16 weights are *already dequantised* (`w = q*ws`, VERIFIED `max|w|/ws = 127`), fp32 accumulate,
+  `+ fp16 bias`, **no scale, no ReLU** (matches `requant_N20` in `Conv2D_64_3_3_20_Relu_mixed.cl`, which only does `add.f bias`). Channels 0-15 = flow,
+  depth-to-space x2 in **DCR** order (`c = (dy*2+dx)*4 + k`, from the asm store offsets); channel 16 = mask plane at net resolution; 17-19 unused (zero weights).
+  Accumulation order differs from Adreno `pkmad.f16`; each fp16 product is exact in fp32, so only the add order can differ (<= 1 fp16 ulp).
+- Weight layout repacked `[oc][ic][3][3] -> [oc][ky][kx][ic]` (layout of the files VERIFIED by tap-correlation); pure permutation.
+**Validation:** `tests/fgnet_test.cpp` — GPU == independent CPU reference, bit-exact on all 14 layers of both nets (real weights), 3 runs deterministic, validation-clean.
+
+## D3 — QR head output quantisation  [reconstructed, partly ASSUMED]
+QR `conv_out_flow_mask` stores uint8 (`modeBias=128` into the vendor `QRUnpack`, so no shift). VERIFIED: the *bias already carries the output zero-point*
+(adding `+offset` again shifted every flow by `offset*scale*512 = 6 px`; removing it makes zero residual map to `q == offset`). The `max/min` clamp
+the host passes is not recoverable: we clamp to `[zp, 255]` (ReLU in the quantised domain, as `modelconfig.json` says `relu`); `ANF_QR_RELU=0` clamps to `[0,255]`.
+On the test scene both give identical PSNR. ASSUMED.
+
+## D4 — FG pipeline wiring (`runtime/fg.cpp`)  [reconstructed host logic; the 8 vendor shaders run unchanged]
+The vendor SPIR-V is unchanged. The *host* logic that ANF runs around it is ours:
+- **Resolutions (ASSUMED, consistent with every shader):** PREPROCESS = ceil(FULL/2); QR = PREPROCESS padded to x4; LR = ceil(QR/4) padded to x4
+  (pyramid shader: 4x4 QR texels per LR texel; QRBlend samples flow at `pix/4` and mask at `pix/8` of FULL).
+- Push constants/spec constants/format of every intermediate come from the reflected shader interfaces; quant scales/offsets from `network_io_encodings.json` of the
+  prod-8 model dirs. `jitter_*=0`, `use_norm_depth=0`, `invert_depth` configurable, `discontinuityThresholdSq=0` (value ANF uses unknown).
+- Pre-frame state: packed-MV buffers and fallback stats zeroed; depth-stats accumulators initialised (`min=+inf` bits, `max=0`).
+- History (prev/curr ping-pong for QR/LR YUV, LR depth, QR depth pyramid; prior colour copy). First frame: previous := current.
+- `AIFFQRBlendV2FINT` chosen over `QRBlendV2`; `AIFFLRUnpackV2CL` (fp16 input) over `LRUnpackV2` (uint16-quantised data-graph encoding).
+- **Fallback semantics (VERIFIED from the shader):** the blend outputs the *current frame unmodified* when `luma_sum > 8*LRW*(LRH-1)` (mean |dluma| > 8/255
+  per LR texel: a scene-cut detector) or when > 20% of LR texels have |MV| > 32 px. Fast motion therefore bypasses FG by design.
+**Validation:** `tests/fg_test.cpp` on the SDK's own hero render translated by a known sub-pixel vector: deterministic across reset+replay; identity at zero motion
+(57 dB); at (2, 0.7) px/frame FG is 31.7 dB vs the analytic mid-frame against 31.5 dB for plain averaging and 27.2 dB for repeat-current. NOT device-validated.

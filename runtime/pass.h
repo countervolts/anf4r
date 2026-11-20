@@ -29,6 +29,7 @@ public:
     void record(Context& ctx, VkCommandBuffer cb, uint32_t gridW, uint32_t gridH, uint32_t gridZ,
                 const void* push, uint32_t pushBytes);
 
+    bool hasBinding(uint32_t b) const { return kindOf_.count(b) != 0; }
     uint32_t lx = 1, ly = 1, lz = 1;
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 private:

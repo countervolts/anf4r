@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -96,25 +97,25 @@ FgNetDims fgNetDims(int W, int H) {
 
 // ---------------- CPU references ----------------
 static inline float rndazf(float x) { return x >= 0 ? std::floor(x + 0.5f) : std::ceil(x - 0.5f); }
-static int accI8(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int ox, int oy, int oc) {
+static int accI8(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int ox, int oy, int oc, int padv) {
     int a = 0;
-    for (int ky = 0; ky < 3; ++ky) { int iy = oy * L.stride + ky - 1; if (iy < 0 || iy >= H) continue;
-        for (int kx = 0; kx < 3; ++kx) { int ix = ox * L.stride + kx - 1; if (ix < 0 || ix >= W) continue;
+    for (int ky = 0; ky < 3; ++ky) { int iy = oy * L.stride + ky - 1; if (iy < 0 || iy >= H) { if (padv) for (int kx = 0; kx < 3; ++kx) for (int c = 0; c < L.ic; ++c) a += padv * (int)L.w8[(((size_t)oc * 3 + ky) * 3 + kx) * L.ic + c]; continue; }
+        for (int kx = 0; kx < 3; ++kx) { int ix = ox * L.stride + kx - 1; if (ix < 0 || ix >= W) { if (padv) for (int c = 0; c < L.ic; ++c) a += padv * (int)L.w8[(((size_t)oc * 3 + ky) * 3 + kx) * L.ic + c]; continue; }
             const int8_t* ip = &in[((size_t)iy * W + ix) * L.ic]; const int8_t* wp = &L.w8[(((size_t)oc * 3 + ky) * 3 + kx) * L.ic];
             for (int c = 0; c < L.ic; ++c) a += (int)ip[c] * (int)wp[c]; } }
     return a;
 }
-std::vector<int8_t> fgConvI8CPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int lo, int hi) {
+std::vector<int8_t> fgConvI8CPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int lo, int hi, int padv) {
     OW = (W - 1) / L.stride + 1; OH = (H - 1) / L.stride + 1; std::vector<int8_t> out((size_t)OW * OH * L.oc);
     for (int y = 0; y < OH; ++y) for (int x = 0; x < OW; ++x) for (int c = 0; c < L.oc; ++c) {
-        volatile float f = std::fma(L.scale[c], (float)accI8(L, in, W, H, x, y, c), L.biasf[c]);
+        volatile float f = std::fma(L.scale[c], (float)accI8(L, in, W, H, x, y, c, padv), L.biasf[c]);
         float g = std::min(std::max((float)f, (float)lo), (float)hi); out[((size_t)y * OW + x) * L.oc + c] = (int8_t)(int)rndazf(g); }
     return out;
 }
-std::vector<uint16_t> fgConvI8ToHalfCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH) {
+std::vector<uint16_t> fgConvI8ToHalfCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int padv) {
     OW = (W - 1) / L.stride + 1; OH = (H - 1) / L.stride + 1; std::vector<uint16_t> out((size_t)OW * OH * L.oc);
     for (int y = 0; y < OH; ++y) for (int x = 0; x < OW; ++x) for (int c = 0; c < L.oc; ++c) {
-        volatile float f = std::fma(L.scale[c], (float)accI8(L, in, W, H, x, y, c), L.biasf[c]);
+        volatile float f = std::fma(L.scale[c], (float)accI8(L, in, W, H, x, y, c, padv), L.biasf[c]);
         out[((size_t)y * OW + x) * L.oc + c] = floatToHalf(std::max((float)f, 0.0f)); }
     return out;
 }
@@ -134,8 +135,8 @@ void fgHeadLRCPU(const FgLayer& L, const std::vector<uint16_t>& in, int W, int H
         mask[(size_t)y * W + x] = floatToHalf(headLR(L, in, W, H, x, y, 16)); }
 }
 static uint8_t q8(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int x, int y, int oc, int zp) {
-    volatile float f = std::fma(L.scale[oc], (float)accI8(L, in, W, H, x, y, oc), L.biasf[oc]);
-    float g = rndazf((float)f) + (float)zp; g = std::min(std::max(g, (float)zp), 255.0f); return (uint8_t)(unsigned)g;
+    volatile float f = std::fma(L.scale[oc], (float)accI8(L, in, W, H, x, y, oc, -128), L.biasf[oc]);
+    float g = rndazf((float)f); g = std::min(std::max(g, getenv("ANF_QR_RELU") && atoi(getenv("ANF_QR_RELU")) == 0 ? 0.0f : (float)zp), 255.0f); return (uint8_t)(unsigned)g;
 }
 void fgHeadQRCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int flowZp, int maskZp, std::vector<uint8_t>& flow, std::vector<uint8_t>& mask) {
     flow.assign((size_t)(2 * H) * (2 * W) * 4, 0); mask.assign((size_t)W * H, 0);
@@ -170,7 +171,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
         size_t bytes = (size_t)ow * oh * L.oc * (half ? 2 : 1);
         ctx.createBuffer(act_[i], (bytes + 3) & ~size_t(3), false);
         std::vector<BindDesc> b = {{0,BindKind::StorageBuffer,"in"},{1,BindKind::StorageBuffer,"w"},{2,BindKind::StorageBuffer,"b"},{3,BindKind::StorageBuffer,"s"},{4,BindKind::StorageBuffer,"o"},{5,BindKind::StorageBuffer,"o8"}};
-        std::vector<SpecConst> sc = {{0,cw},{1,ch},{2,L.ic},{3,L.oc},{4,L.stride},{5,ow},{6,oh},{7,half?1:0},{8,0},{9,127}};
+        std::vector<SpecConst> sc = {{0,cw},{1,ch},{2,L.ic},{3,L.oc},{4,L.stride},{5,ow},{6,oh},{7,half?1:0},{8,-128},{9,127},{10,i == 0 ? 0 : -128}};
         if (!passes_[i].build(ctx, cs, b, sc, 0, 8, 8, 1, "main")) return false;
         passes_[i].bindBuffer(1, wbuf_[i].buffer); passes_[i].bindBuffer(2, bbuf_[i].buffer); passes_[i].bindBuffer(3, sbuf_[i].buffer);
         passes_[i].bindBuffer(4, act_[i].buffer); passes_[i].bindBuffer(5, act_[i].buffer);
@@ -194,7 +195,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
         } else {
             std::vector<BindDesc> b = {{0,BindKind::StorageBuffer,"in"},{1,BindKind::StorageBuffer,"w"},{2,BindKind::StorageBuffer,"b"},{3,BindKind::StorageBuffer,"s"},{4,BindKind::StorageBuffer,"o"}};
             int pitch = mode ? nw : dims.flowW;
-            if (!p.build(ctx, hq, b, {{0,nw},{1,nh},{2,mode},{3,pitch},{4,(int)m.enc.flowOffset},{5,(int)m.enc.maskOffset}}, 0, 8, 8, 1, "main")) return false;
+            if (!p.build(ctx, hq, b, {{0,nw},{1,nh},{2,mode},{3,pitch},{4,(int)m.enc.flowOffset},{5,(int)m.enc.maskOffset},{6,getenv("ANF_QR_RELU") ? atoi(getenv("ANF_QR_RELU")) : 1}}, 0, 8, 8, 1, "main")) return false;
             p.bindBuffer(1, wbuf_[nl].buffer); p.bindBuffer(2, bbuf_[nl].buffer); p.bindBuffer(3, sbuf_[nl].buffer); p.bindBuffer(4, (mode ? mask : flow).buffer);
             steps_.push_back({(int)(nl + mode), nw, nh, mode ? 1 : 4});
         }

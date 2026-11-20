@@ -48,8 +48,8 @@ private:
 };
 
 // CPU references (bit-exact intent). int8 in [H][W][IC] -> int8 out.
-std::vector<int8_t> fgConvI8CPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int lo, int hi);
-std::vector<uint16_t> fgConvI8ToHalfCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH);
+std::vector<int8_t> fgConvI8CPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int lo, int hi, int padv);
+std::vector<uint16_t> fgConvI8ToHalfCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int& OW, int& OH, int padv);
 void fgHeadLRCPU(const FgLayer& L, const std::vector<uint16_t>& in, int W, int H, std::vector<uint16_t>& flow, std::vector<uint16_t>& mask);
 void fgHeadQRCPU(const FgLayer& L, const std::vector<int8_t>& in, int W, int H, int flowZp, int maskZp, std::vector<uint8_t>& flow, std::vector<uint8_t>& mask);
 float halfToFloat(uint16_t h);

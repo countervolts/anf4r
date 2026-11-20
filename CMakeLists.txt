@@ -13,5 +13,20 @@ target_sources(anf4r_rt PRIVATE runtime/model.cpp)
 add_executable(model_test tests/model_test.cpp)
 target_link_libraries(model_test PRIVATE anf4r_rt)
 target_sources(anf4r_rt PRIVATE runtime/fgnet.cpp)
+target_sources(anf4r_rt PRIVATE runtime/fg.cpp)
+add_executable(fg_test tests/fg_test.cpp)
+target_link_libraries(fg_test PRIVATE anf4r_rt)
 add_executable(fgnet_test tests/fgnet_test.cpp)
 target_link_libraries(fgnet_test PRIVATE anf4r_rt)
+
+# Compile our own compute kernels to SPIR-V (vendor shaders are used as-is from vendor/assets/spirv).
+find_program(GLSLC glslc REQUIRED)
+set(ANF_KERNELS conv_int8 fg_conv_i8 fg_head_lr fg_head_qr)
+set(ANF_SPV "")
+foreach(k ${ANF_KERNELS})
+  add_custom_command(OUTPUT ${CMAKE_SOURCE_DIR}/build/${k}.spv
+    COMMAND ${GLSLC} --target-env=vulkan1.3 -O ${CMAKE_SOURCE_DIR}/kernels/${k}.comp -o ${CMAKE_SOURCE_DIR}/build/${k}.spv
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernels/${k}.comp)
+  list(APPEND ANF_SPV ${CMAKE_SOURCE_DIR}/build/${k}.spv)
+endforeach()
+add_custom_target(anf_kernels ALL DEPENDS ${ANF_SPV})

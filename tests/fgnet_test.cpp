@@ -26,8 +26,8 @@ static int runNet(Context& ctx, bool lr, int W, int H, const char* root) {
     std::vector<std::vector<uint8_t>> cpuAct; std::vector<int8_t> cur = in; int cw = W, ch = H; std::vector<uint16_t> curH;
     size_t nl = m.hidden.size();
     for (size_t i = 0; i < nl; ++i) { int ow, oh;
-        if (lr && i == nl - 1) { curH = fgConvI8ToHalfCPU(m.hidden[i], cur, cw, ch, ow, oh); cpuAct.emplace_back((uint8_t*)curH.data(), (uint8_t*)curH.data() + curH.size() * 2); }
-        else { cur = fgConvI8CPU(m.hidden[i], cur, cw, ch, ow, oh, 0, 127); cpuAct.emplace_back((uint8_t*)cur.data(), (uint8_t*)cur.data() + cur.size()); }
+        if (lr && i == nl - 1) { curH = fgConvI8ToHalfCPU(m.hidden[i], cur, cw, ch, ow, oh, -128); cpuAct.emplace_back((uint8_t*)curH.data(), (uint8_t*)curH.data() + curH.size() * 2); }
+        else { cur = fgConvI8CPU(m.hidden[i], cur, cw, ch, ow, oh, -128, 127, i == 0 ? 0 : -128); cpuAct.emplace_back((uint8_t*)cur.data(), (uint8_t*)cur.data() + cur.size()); }
         cw = ow; ch = oh; }
     std::vector<uint8_t> cflow, cmask;
     if (lr) { std::vector<uint16_t> f, mk; fgHeadLRCPU(m.head, curH, cw, ch, f, mk); cflow.assign((uint8_t*)f.data(), (uint8_t*)f.data() + f.size() * 2); cmask.assign((uint8_t*)mk.data(), (uint8_t*)mk.data() + (size_t)cw * ch * 2); }
