@@ -30,3 +30,10 @@ Jitter: the NGX/image-coordinate sample offset (y down) is converted to ANF's y-
 | Frame generation (`FGOutput=anf`, `FGInput=upscaler`) | **works in the harness** (`ANF_FG=1 tests/run_optiscaler.sh`, 20 frames, swapchain): from the first active frame every present becomes two, the real frame is put back bit-exactly, generated frames are 29.5 dB vs the true in-between frame (repeat-current 27.8 dB, plain average 30.3 dB; hero fixture `tools/make_hero_fixture.py`, 2 px/frame pan). `anf4r_framegen_capture` copies the backbuffer, up-samples OptiScaler's render-size depth/MV to FULL size (`kernels/fg_resample.comp`), runs `FrameGen`, blits the result into the backbuffer; `restore` writes the real frame back. The scene-cut guard of the vendor blend (luma difference) makes fast motion pass through unmodified. |
 | Device features | the game's device must have `shaderInt8` + `storageBuffer8BitAccess` + `bufferDeviceAddress`; vkd3d-proton under RADV provided them. |
 Known limits: one SR context per size pair, display-resolution MVs unsupported (as in m4r), vkd3d-proton only, depth assumed reverse-Z unless `DepthInverted()` says otherwise.
+
+## Ghost of Tsushima (installed 2026-11-19, not yet played)
+`dxgi.dll` is this repo's patched OptiScaler (ANF backend); `anf4r/` (dll + data, 18 MB) sits next to the game executable; `OptiScaler.ini` has
+`Dx12Upscaler = anf`, `FGOutput = anf`, `[ANF] FlipJitter = true` (GoT's raw NGX jitter sign is inverted, as measured with m4r). The previous `dxgi.dll` and ini are in
+`anf4r-backup-20261119/` (`restore.sh` puts them back and removes `anf4r/`); the m4r folder is untouched. Check `OptiScaler.log` for
+`InitInternal ANF: ready, WxH -> WxH` (SR; ANF is fixed 2.0x, so use a 2x-ratio mode such as Performance) and `Activate ANF FG` (FG). Untested in the real game:
+display-resolution motion vectors (OptiScaler warns), the game's depth/UI handling, and whether GoT's vkd3d-proton device exposes the int8 features anf4r needs (the harness's does).
