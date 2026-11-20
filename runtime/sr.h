@@ -20,6 +20,7 @@ public:
     bool init(Context& ctx, const SrConfig& cfg);
     void destroy(Context& ctx);
     void reset() { needClear_ = true; }
+    bool usesWmma() const { return convWmma_[0]; }
     void setDepthInverted(bool inv) { cfg_.invertDepth = inv; }
     // color: LR linear HDR (sampled), depth: LR fp32 reverse-Z, motion: LR rg (uv units, jitter-free),
     // output: HR RGBA16F storage image (2*lrW x 2*lrH). All GENERAL layout. jitter in [-0.5,0.5] LR px (ANF convention).

@@ -11,6 +11,7 @@
 using namespace anf4r;
 
 static void dumpFlush(struct anf4r_context* c);
+static void logLine(const std::string& dir, const std::string& m) { std::ofstream(dir + "/anf4r.log", std::ios::app) << m << "\n"; }
 struct anf4r_context {
     Context ctx;
     std::string dataDir, error;
@@ -45,6 +46,9 @@ int anf4r_create(anf4r_context** out, PFN_vkGetInstanceProcAddr gipa, VkInstance
     auto* c = new anf4r_context(); c->dataDir = dataDir ? dataDir : ".";
     if (!anf4r::loadVulkan(gipa, inst, dev)) { delete c; return -1; }
     if (!c->ctx.adopt(inst, phys, dev, family)) { delete c; return -2; }
+    { std::ifstream t(c->dataDir + "/anf4r.log", std::ios::ate); if (t && t.tellg() > 65536) { t.close(); std::remove((c->dataDir + "/anf4r.log").c_str()); } }   // append; keep it small
+    logLine(c->dataDir, "GPU: " + c->ctx.deviceName + " | int8 cooperative matrices: " + (c->ctx.coopInt8 ? "yes" : "no") + " | subgroup 32: " + (c->ctx.subgroup32 ? "yes" : "no") +
+            " | convolution path: " + (c->ctx.wmmaOk() ? "matrix units (cooperative matrix)" : "scalar fallback"));
     *out = c; return 0;
 }
 void anf4r_destroy(anf4r_context* c) {
@@ -82,6 +86,7 @@ int anf4r_upscale_init(anf4r_context* c, uint32_t ow, uint32_t oh, uint32_t iw, 
         if (!c->srResize.build(c->ctx, code, {{0, BindKind::SampledImage, "s"}, {1, BindKind::StorageImage, "d"}}, {}, 16, 8, 8, 1, "main")) { c->error = c->ctx.error; return 5; }
     }
     { VkCommandBuffer cb = c->ctx.begin(); c->ctx.toLayout(cb, c->srOut, VK_IMAGE_LAYOUT_GENERAL); if (c->srFinal.image) c->ctx.toLayout(cb, c->srFinal, VK_IMAGE_LAYOUT_GENERAL); c->ctx.submit(cb); }
+    logLine(c->dataDir, "SR " + std::to_string(iw) + "x" + std::to_string(ih) + " -> " + std::to_string(ow) + "x" + std::to_string(oh) + ": convolutions on " + (c->sr->usesWmma() ? "matrix units" : "scalar kernels"));
     c->srW = iw; c->srH = ih; return 0;
 }
 
@@ -217,6 +222,7 @@ static int ensureFg(anf4r_context* c, uint32_t w, uint32_t h, VkFormat bbFormat)
     if (code.empty()) { c->error = "missing fg_resample.spv"; return 3; }
     const BindKind SI = BindKind::SampledImage, ST = BindKind::StorageImage;
     if (!c->resample.build(c->ctx, code, {{0, SI, "d"}, {1, SI, "m"}, {2, ST, "od"}, {3, ST, "om"}}, {}, 24, 8, 8, 1, "main")) { c->error = c->ctx.error; return 4; }
+    logLine(c->dataDir, "FG " + std::to_string(w) + "x" + std::to_string(h) + ": convolutions on " + (c->fg->lrNet.usedWmma ? "matrix units" : "scalar kernels"));
     c->fgW = w; c->fgH = h; c->realFmt = bbFormat; c->fgFrames = 0; return 0;
 }
 

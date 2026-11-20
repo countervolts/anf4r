@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROTON_DIR="$(realpath "$1")"; OPTI="$(realpath "$2")"; FIX="$(realpath "$3")"
 FRAMES="${4:-8}"; IW="${5:-640}"; IH="${6:-360}"; OW="${7:-1280}"; OH="${8:-720}"
-HARNESS="${ANF_HARNESS:?set ANF_HARNESS to m4r's d3d12_harness.exe}"
+HARNESS="${ANF_HARNESS:?set ANF_HARNESS to the path of m4r d3d12_harness.exe}"
 APP="${ANF_APP_DIR:-$ROOT/build/harness-app}"; COMPAT="${ANF_COMPAT_DIR:-$ROOT/build/harness-compat}"
 rm -rf "$APP"; mkdir -p "$APP/out" "$COMPAT"
 cp -f "$HARNESS" "$APP/d3d12_harness.exe"; cp -f "$OPTI" "$APP/dxgi.dll"

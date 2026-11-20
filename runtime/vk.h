@@ -35,6 +35,10 @@ struct Context {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
     bool ownsDevice = false;
+    // capabilities, filled by create()/adopt(): the matrix-unit convolution needs int8 16x16x16 subgroup cooperative matrices and a pinnable subgroup size of 32
+    std::string deviceName; bool coopInt8 = false, subgroup32 = false;
+    bool wmmaOk() const { return coopInt8 && subgroup32; }
+    void probe();
     std::string error;
 
     bool create(bool validation = false);     // own instance+device (harness)

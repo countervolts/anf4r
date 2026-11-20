@@ -7,7 +7,7 @@
 #include <vulkan/vulkan.h>
 
 #define ANF4R_VK_INSTANCE_FUNCS(X) X(vkCreateDevice) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceMemoryProperties) \
-    X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkDestroyInstance) X(vkGetDeviceProcAddr)
+    X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkDestroyInstance) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceProperties2)
 #define ANF4R_VK_DEVICE_FUNCS(X) X(vkAllocateCommandBuffers) X(vkAllocateDescriptorSets) X(vkAllocateMemory) X(vkBeginCommandBuffer) \
     X(vkBindBufferMemory) X(vkBindImageMemory) X(vkCmdBindDescriptorSets) X(vkCmdBindPipeline) X(vkCmdBlitImage) X(vkCmdClearColorImage) X(vkCmdCopyBuffer) \
     X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) X(vkCmdCopyImageToBuffer) X(vkCmdDispatch) X(vkCmdFillBuffer) X(vkCmdPipelineBarrier) \
@@ -28,6 +28,7 @@ ANF4R_VK_DEVICE_FUNCS(ANF4R_VK_DECLARE)
 #endif
 
 namespace anf4r {
+extern PFN_vkGetInstanceProcAddr g_gipa;   // set by loadVulkan (in-process use); null for prototype builds
 // Loads the table (no-op without ANF4R_DYNAMIC_VK). Returns false if a function is missing.
 bool loadVulkan(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkDevice device);
 }

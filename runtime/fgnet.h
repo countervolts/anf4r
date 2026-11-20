@@ -39,6 +39,7 @@ public:
     void destroy(Context& ctx);
     void record(Context& ctx, VkCommandBuffer cb, VkBuffer input);   // input: int8 NHWC [H][W][32]
     FgNetDims dims;
+    bool usedWmma = false;   // true if the hidden layers run on the matrix units
     const Buffer& activation(size_t i) const { return act_[i]; }
     Buffer flow, mask;   // LR: fp16 [flowH][flowW][4] / fp16 [nh][nw];  QR: uint8 [flowH][flowW][4] / uint8 [nh][nw]
 private:

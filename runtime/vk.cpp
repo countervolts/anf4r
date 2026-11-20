@@ -1,6 +1,8 @@
 // anf4r: Vulkan context implementation. SPDX-License-Identifier: GPL-3.0-only
 #include "vk.h"
 #include <cstring>
+#include <cstdlib>
+#include <string>
 
 namespace anf4r {
 
@@ -42,12 +44,15 @@ bool Context::create(bool validation) {
     uint32_t n = 0; vkEnumeratePhysicalDevices(instance, &n, nullptr);
     std::vector<VkPhysicalDevice> devs(n); vkEnumeratePhysicalDevices(instance, &n, devs.data());
     physical = VK_NULL_HANDLE;
+    const char* want = getenv("ANF_DEVICE");   // optional: case-insensitive substring of the device name to use (testing other drivers)
     for (auto d : devs) {
         VkPhysicalDeviceProperties p; vkGetPhysicalDeviceProperties(d, &p);
+        if (want) { std::string a = p.deviceName, b = want; for (auto& c : a) c = tolower(c); for (auto& c : b) c = tolower(c); if (a.find(b) != std::string::npos) { physical = d; break; } continue; }
         if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) { physical = d; break; }
         if (!physical) physical = d;
     }
     if (!physical) { error = "no physical device"; return false; }
+    probe();
     uint32_t qn = 0; vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, nullptr);
     std::vector<VkQueueFamilyProperties> qf(qn); vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, qf.data());
     queueFamily = ~0u;
@@ -64,11 +69,11 @@ bool Context::create(bool validation) {
     VkPhysicalDeviceFeatures2 feat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2}; feat.pNext = &f13;
     feat.features.shaderInt16 = VK_TRUE; feat.features.shaderStorageImageExtendedFormats = VK_TRUE;
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
-    cm.cooperativeMatrix = VK_TRUE; f12.pNext = &cm;
+    cm.cooperativeMatrix = VK_TRUE; if (coopInt8) f12.pNext = &cm;
     const char* exts[] = {"VK_KHR_cooperative_matrix"};
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &feat; dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = exts;
+    dci.enabledExtensionCount = coopInt8 ? 1 : 0; dci.ppEnabledExtensionNames = exts;
     if (vkCreateDevice(physical, &dci, nullptr, &device) != VK_SUCCESS) { error = "vkCreateDevice"; return false; }
     ownsDevice = true;
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
@@ -79,6 +84,28 @@ bool Context::create(bool validation) {
     return true;
 }
 
+void Context::probe() {
+    VkPhysicalDeviceSubgroupSizeControlProperties sc{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+    VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; p2.pNext = &sc;
+    vkGetPhysicalDeviceProperties2(physical, &p2);
+    deviceName = p2.properties.deviceName;
+    subgroup32 = sc.minSubgroupSize <= 32 && sc.maxSubgroupSize >= 32;
+    coopInt8 = false;
+    PFN_vkGetInstanceProcAddr gipa =
+#ifdef ANF4R_DYNAMIC_VK
+        g_gipa;
+#else
+        vkGetInstanceProcAddr;
+#endif
+    auto fn = gipa ? (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)gipa(instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR") : nullptr;
+    if (!fn) return;
+    uint32_t n = 0; if (fn(physical, &n, nullptr) != VK_SUCCESS || !n) return;
+    std::vector<VkCooperativeMatrixPropertiesKHR> v(n, {VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
+    if (fn(physical, &n, v.data()) != VK_SUCCESS) return;
+    for (auto& x : v) if (x.MSize == 16 && x.NSize == 16 && x.KSize == 16 && x.AType == VK_COMPONENT_TYPE_SINT8_KHR && x.BType == VK_COMPONENT_TYPE_SINT8_KHR &&
+                         x.CType == VK_COMPONENT_TYPE_SINT32_KHR && x.ResultType == VK_COMPONENT_TYPE_SINT32_KHR && x.scope == VK_SCOPE_SUBGROUP_KHR) coopInt8 = true;
+}
+
 bool Context::adopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32_t family) {
     instance = inst; physical = phys; device = dev; queueFamily = family; ownsDevice = false;
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
@@ -86,6 +113,7 @@ bool Context::adopt(VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; pci.queueFamilyIndex = queueFamily;
     if (vkCreateCommandPool(device, &pci, nullptr, &pool) != VK_SUCCESS) { error = "command pool"; return false; }
+    probe();
     return true;
 }
 

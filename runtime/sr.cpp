@@ -1,5 +1,6 @@
 // anf4r: SR pipeline. GPL-3.0-only
 #include "sr.h"
+#include "wmma.h"
 #include <cmath>
 #include <cstring>
 
@@ -93,12 +94,9 @@ bool SuperRes::init(Context& ctx, const SrConfig& cfg) {
         int ow = (cw - 1) / L[i].stride + 1, oh = (ch - 1) / L[i].stride + 1;
         const int icw = L[i].ic == 20 ? 32 : L[i].ic;
         std::vector<BindDesc> cb6 = {B(0,SB,"in"),B(1,SB,"w"),B(2,SB,"b"),B(3,SB,"s"),B(4,SB,"o"),B(5,SB,"o8")};
-        bool wm = !wmma.empty() && !getenv("ANF_NO_WMMA");
-        if (wm) {
-            conv_[i].requiredSubgroup = 32;
-            std::vector<BindDesc> cb8 = cb6; cb8.push_back(B(6,SB,"f")); cb8.push_back(B(7,SB,"m"));
-            if (!conv_[i].build(ctx, wmma, cb8, {S(0,cw),S(1,ch),S(2,icw),S(3,icw),S(4,L[i].oc),S(5,L[i].stride),S(6,ow),S(7,oh),S(8,0),S(9,-128),S(10,127),S(11,-128),S(12,0)}, 0, 32, 1, 1, "main")) { wm = false; ctx.error.clear(); conv_[i] = Pass(); }
-        }
+        bool wm = ctx.wmmaOk() && !wmma.empty() && !getenv("ANF_NO_WMMA");
+        WmmaShape ws{cw, ch, icw, icw, L[i].oc, L[i].stride, ow, oh, 0, -128, 127, -128, 0, {}};
+        if (wm) { if (!buildWmmaConv(ctx, conv_[i], wmma, ws, cfg.shaderDir)) { wm = false; ctx.error.clear(); conv_[i] = Pass(); } }
         convWmma_[i] = wm;
         if (!wm && !conv_[i].build(ctx, cv, cb6, {S(0,cw),S(1,ch),S(2,icw),S(3,L[i].oc),S(4,L[i].stride),S(5,ow),S(6,oh),S(7,0),S(8,-128),S(9,127),S(10,-128),S(11,0),S(12,icw)}, 0, 8, 8, 1, "main")) return false;
         conv_[i].label = std::string("sr_") + L[i].name;
@@ -130,7 +128,7 @@ bool SuperRes::record(Context& ctx, VkCommandBuffer cb, const Texture& color, co
     for (int i = 0; i < 4; ++i) {
         int ow = (cw - 1) / (i == 0 ? 2 : 1) + 1, oh = (ch - 1) / (i == 0 ? 2 : 1) + 1;
         conv_[i].bindBuffer(0, in); conv_[i].bindBuffer(1, lw[i]->w.buffer); conv_[i].bindBuffer(2, lw[i]->b.buffer); conv_[i].bindBuffer(3, lw[i]->s.buffer);
-        if (convWmma_[i]) conv_[i].record(ctx, cb, ((ow + 31) / 32) * 32, oh, ocs[i] / 32, nullptr, 0); else conv_[i].record(ctx, cb, ow, oh, ocs[i], nullptr, 0); ctx.barrierAll(cb);
+        if (convWmma_[i]) conv_[i].record(ctx, cb, ((ow + 31) / 32) * conv_[i].lx, oh, ocs[i] / 32, nullptr, 0); else conv_[i].record(ctx, cb, ow, oh, ocs[i], nullptr, 0); ctx.barrierAll(cb);
         in = act[i].buffer; cw = ow; ch = oh;
     }
     // 3. postprocess (grid = HR)

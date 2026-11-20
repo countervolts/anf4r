@@ -10,7 +10,9 @@ ANF4R_VK_DEVICE_FUNCS(ANF4R_VK_DEFINE)
 #endif
 
 namespace anf4r {
+PFN_vkGetInstanceProcAddr g_gipa = nullptr;
 bool loadVulkan(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkDevice device) {
+    g_gipa = gipa;
 #ifdef ANF4R_DYNAMIC_VK
     bool ok = true;
 #define LI(f) f = reinterpret_cast<PFN_##f>(gipa(instance, #f)); ok &= f != nullptr;

@@ -1,5 +1,6 @@
 // anf4r: FG flow networks. GPL-3.0-only
 #include "fgnet.h"
+#include "wmma.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -173,15 +174,14 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
         ctx.createBuffer(act_[i], (bytes + 3) & ~size_t(3), false);
         std::vector<BindDesc> b = {{0,BindKind::StorageBuffer,"in"},{1,BindKind::StorageBuffer,"w"},{2,BindKind::StorageBuffer,"b"},{3,BindKind::StorageBuffer,"s"},{4,BindKind::StorageBuffer,"o"},{5,BindKind::StorageBuffer,"o8"}};
         int pad = i == 0 ? 0 : -128;
-        bool wm = !wmma.empty() && L.oc % 32 == 0 && L.ic % 16 == 0 && !getenv("ANF_NO_WMMA");
-        if (wm) {   // cooperative-matrix implicit GEMM (bit-identical to the scalar kernel)
-            std::vector<SpecConst> sw = {{0,cw},{1,ch},{2,L.ic},{3,L.ic},{4,L.oc},{5,L.stride},{6,ow},{7,oh},{8,half?1:0},{9,-128},{10,127},{11,pad},{12,0}};
-            passes_[i].requiredSubgroup = 32;
-            std::vector<BindDesc> b8 = b; b8.push_back({6,BindKind::StorageBuffer,"f"}); b8.push_back({7,BindKind::StorageBuffer,"m"});   // unused outputs of the head mode
-            if (!passes_[i].build(ctx, wmma, b8, sw, 0, 32, 1, 1, "main")) { wm = false; ctx.error.clear(); passes_[i] = Pass(); }
+        bool wm = ctx.wmmaOk() && !wmma.empty() && L.oc % 32 == 0 && L.ic % 16 == 0 && !getenv("ANF_NO_WMMA");
+        WmmaShape ws{cw, ch, L.ic, L.ic, L.oc, L.stride, ow, oh, half ? 1 : 0, -128, 127, pad, 0, {}};
+        if (wm) {   // cooperative-matrix implicit GEMM (bit-identical to the scalar kernel); variant picked by timing on this GPU
+            if (!buildWmmaConv(ctx, passes_[i], wmma, ws, spvDir)) { wm = false; ctx.error.clear(); passes_[i] = Pass(); }
         }
+        if (i == 0) usedWmma = wm;
         int gx, gy, gz;
-        if (wm) { gx = ((ow + 31) / 32) * 32; gy = oh; gz = L.oc / 32; }
+        if (wm) { uint32_t ux, uy, uz; wmmaGrid(passes_[i], ws, ux, uy, uz); gx = ux; gy = uy; gz = uz; }
         else {
             std::vector<SpecConst> sc = {{0,cw},{1,ch},{2,L.ic},{3,L.oc},{4,L.stride},{5,ow},{6,oh},{7,half?1:0},{8,-128},{9,127},{10,pad}};
             if (!passes_[i].build(ctx, cs, b, sc, 0, 8, 8, 1, "main")) return false;
@@ -201,7 +201,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
     if (m.isLR) { fb = (size_t)dims.flowW * dims.flowH * 8; mb = ((size_t)nw * nh * 2 + 3) & ~size_t(3); }
     else { fb = (size_t)dims.flowW * dims.flowH * 4; mb = ((size_t)nw * nh + 3) & ~size_t(3); }
     ctx.createBuffer(flow, fb, false); ctx.createBuffer(mask, mb, false);
-    bool headWm = !m.isLR && !wmma.empty() && !getenv("ANF_NO_WMMA");
+    bool headWm = ctx.wmmaOk() && !m.isLR && !wmma.empty() && !getenv("ANF_NO_WMMA");
     if (headWm) {   // QR head on the matrix units: OC padded 20 -> 32 (zero weights/bias/scale), D2S + uint8 quantisation in the epilogue
         std::vector<int8_t> w32((size_t)32 * 9 * 32, 0); std::copy(m.head.w8.begin(), m.head.w8.end(), w32.begin());
         std::vector<float> b32(32, 0.f), s32(32, 0.f); std::copy(m.head.biasf.begin(), m.head.biasf.end(), b32.begin()); std::copy(m.head.scale.begin(), m.head.scale.end(), s32.begin());
@@ -210,7 +210,7 @@ bool FgNet::build(Context& ctx, const FgNetModel& m, int W, int H, const std::st
         Pass& p = passes_[nl]; p.label = "qr_head"; p.requiredSubgroup = 32;
         std::vector<BindDesc> b; for (uint32_t i = 0; i < 8; ++i) b.push_back({i, BindKind::StorageBuffer, "x"});
         int relu = getenv("ANF_QR_RELU") ? atoi(getenv("ANF_QR_RELU")) : 1;
-        if (p.build(ctx, wmma, b, {{0,cw},{1,ch},{2,32},{3,32},{4,32},{5,1},{6,nw},{7,nh},{8,2},{9,-128},{10,127},{11,-128},{12,0},{13,(int)m.enc.flowOffset},{14,(int)m.enc.maskOffset},{15,relu},{16,dims.flowW},{17,nw}}, 0, 32, 1, 1, "main")) {
+        if (p.build(ctx, wmma, b, {{0,cw},{1,ch},{2,32},{3,32},{4,32},{5,1},{6,nw},{7,nh},{8,2},{9,-128},{10,127},{11,-128},{12,0},{13,(int)m.enc.flowOffset},{14,(int)m.enc.maskOffset},{15,relu},{16,dims.flowW},{17,nw},{18,32},{19,0}}, 0, 32, 1, 1, "main")) {
             p.bindBuffer(1, wbuf_[nl].buffer); p.bindBuffer(2, bbuf_[nl].buffer); p.bindBuffer(3, sbuf_[nl].buffer);
             p.bindBuffer(4, flow.buffer); p.bindBuffer(5, flow.buffer); p.bindBuffer(6, flow.buffer); p.bindBuffer(7, mask.buffer);
             steps_.push_back({(int)nl, ((nw + 31) / 32) * 32, nh, 1});
