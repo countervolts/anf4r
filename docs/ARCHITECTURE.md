@@ -34,6 +34,3 @@ epilogue per element. `fg_conv_i8.comp` is the scalar reference/fallback; `tests
 <data>/modelzoo/aiff-frc-{lr,qr}-v2-prod-8/<layer>/jitter0/{weights.raw,bias.raw,scales.json}  +  network_io_encodings.json
 <data>/config.txt               optional: stabilize = <0..1>, pre_exposure = <float>
 ```
-
-## OptiScaler integration
-See `optiscaler.md`. `anf4r.dll` gets every Vulkan entry point from the game's own device; images arrive as `VkImage` via vkd3d-proton's interop.
