@@ -24,6 +24,7 @@ build/
 build-*/
 external/
 vendor/
+data
 __pycache__/
 *.pyc
 *.o
