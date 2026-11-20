@@ -11,7 +11,7 @@ using namespace anf4r;
 struct anf4r_context {
     Context ctx;
     std::string dataDir, error;
-    std::unique_ptr<SuperRes> sr; int srW = 0, srH = 0;
+    std::unique_ptr<SuperRes> sr; int srW = 0, srH = 0; uint32_t outW = 0, outH = 0;   // requested SR output size (any ratio)
     Texture srOut;                                   // internal HR RGBA16F target
     std::map<std::pair<VkImage, VkFormat>, Texture> views;   // image views of the caller's images (cached)
     // frame generation
@@ -54,7 +54,8 @@ const char* anf4r_last_error(anf4r_context* c) { return c ? (c->error.empty() ? 
 
 int anf4r_upscale_init(anf4r_context* c, uint32_t ow, uint32_t oh, uint32_t iw, uint32_t ih) {
     c->error.clear();
-    if (ow != 2 * iw || oh != 2 * ih) { c->error = "ANF super resolution is a fixed 2.0x per dimension"; return 1; }
+    // The network is fixed 2x: for other ratios it runs at 2x and the result is resampled (linear) to ow x oh.
+    c->outW = ow; c->outH = oh;
     if (c->sr && c->srW == (int)iw && c->srH == (int)ih) return 0;
     vkDeviceWaitIdle(c->ctx.device);
     if (c->sr) { c->sr->destroy(c->ctx); c->sr.reset(); c->ctx.destroyTexture(c->srOut); }
@@ -69,7 +70,7 @@ int anf4r_upscale_init(anf4r_context* c, uint32_t ow, uint32_t oh, uint32_t iw, 
 int anf4r_upscale(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc* d) {
     c->error.clear();
     uint32_t iw = d->content_width ? d->content_width : d->color.width, ih = d->content_height ? d->content_height : d->color.height;
-    if (!c->sr || c->srW != (int)iw || c->srH != (int)ih) { int r = anf4r_upscale_init(c, 2 * iw, 2 * ih, iw, ih); if (r) return r; }
+    if (!c->sr || c->srW != (int)iw || c->srH != (int)ih) { int r = anf4r_upscale_init(c, c->outW ? c->outW : 2 * iw, c->outH ? c->outH : 2 * ih, iw, ih); if (r) return r; }
     if (d->reset) c->sr->reset();
     Texture col = view(c, d->color), dep = view(c, d->depth), mv = view(c, d->motion);
     Texture* tex[3] = {&col, &dep, &mv}; const anf4r_image* im[3] = {&d->color, &d->depth, &d->motion};
@@ -84,8 +85,10 @@ int anf4r_upscale(anf4r_context* c, VkCommandBuffer cb, const anf4r_upscale_desc
     VkImageLayout back = out.layout;
     c->ctx.toLayout(cb, out, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit b{}; b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    b.srcOffsets[1] = {(int32_t)(2 * iw), (int32_t)(2 * ih), 1}; b.dstOffsets[1] = b.srcOffsets[1];
-    vkCmdBlitImage(cb, c->srOut.image, VK_IMAGE_LAYOUT_GENERAL, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_NEAREST);
+    uint32_t ow = std::min<uint32_t>(c->outW ? c->outW : 2 * iw, d->output.width), oh = std::min<uint32_t>(c->outH ? c->outH : 2 * ih, d->output.height);
+    b.srcOffsets[1] = {(int32_t)(2 * iw), (int32_t)(2 * ih), 1}; b.dstOffsets[1] = {(int32_t)ow, (int32_t)oh, 1};
+    vkCmdBlitImage(cb, c->srOut.image, VK_IMAGE_LAYOUT_GENERAL, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
+                   (ow == 2 * iw && oh == 2 * ih) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
     c->ctx.toLayout(cb, out, back);
     for (int i = 0; i < 3; ++i) { VkImageLayout orig = im[i]->layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_GENERAL : im[i]->layout; c->ctx.toLayout(cb, *tex[i], orig); }
     return 0;

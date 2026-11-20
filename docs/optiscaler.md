@@ -35,5 +35,5 @@ Known limits: one SR context per size pair, display-resolution MVs unsupported (
 `dxgi.dll` is this repo's patched OptiScaler (ANF backend); `anf4r/` (dll + data, 18 MB) sits next to the game executable; `OptiScaler.ini` has
 `Dx12Upscaler = anf`, `FGOutput = anf`, `[ANF] FlipJitter = true` (GoT's raw NGX jitter sign is inverted, as measured with m4r). The previous `dxgi.dll` and ini are in
 `anf4r-backup-20261119/` (`restore.sh` puts them back and removes `anf4r/`); the m4r folder is untouched. Check `OptiScaler.log` for
-`InitInternal ANF: ready, WxH -> WxH` (SR; ANF is fixed 2.0x, so use a 2x-ratio mode such as Performance) and `Activate ANF FG` (FG). Untested in the real game:
+`InitInternal ANF: ready, WxH -> WxH` (SR; any quality mode works: the network runs at its native 2x and is resampled to the output size) and `Activate ANF FG` (FG). Untested in the real game:
 display-resolution motion vectors (OptiScaler warns), the game's depth/UI handling, and whether GoT's vkd3d-proton device exposes the int8 features anf4r needs (the harness's does).

@@ -57,7 +57,7 @@ typedef struct anf4r_framegen_desc {
 ANF4R_API int anf4r_create(anf4r_context** out, PFN_vkGetInstanceProcAddr get_instance_proc_addr, VkInstance instance,
                            VkPhysicalDevice physical, VkDevice device, uint32_t queue_family, const char* data_dir);
 ANF4R_API void anf4r_destroy(anf4r_context* ctx);
-/* 0 on success. ANF SR is fixed 2.0x: out_w/out_h must equal 2*in. max_in_* is the largest content size that will be used. */
+/* 0 on success. The ANF network is fixed 2.0x; other ratios run at 2x and are resampled (linear) to out_w x out_h. */
 ANF4R_API int anf4r_upscale_init(anf4r_context* ctx, uint32_t out_w, uint32_t out_h, uint32_t max_in_w, uint32_t max_in_h);
 ANF4R_API int anf4r_upscale(anf4r_context* ctx, VkCommandBuffer cb, const anf4r_upscale_desc* desc);
 ANF4R_API int anf4r_interpolate_init(anf4r_context* ctx, uint32_t out_w, uint32_t out_h, uint32_t in_w, uint32_t in_h);
