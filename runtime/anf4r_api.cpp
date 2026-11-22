@@ -1,6 +1,10 @@
 // anf4r: C API over SuperRes / FrameGen. SPDX-License-Identifier: GPL-3.0-only
 #include "vkfn.h"
 #include "anf4r.h"
+#ifdef ANF4R_HIPVK
+#include "pass.h"
+#include "hipvk/hipvk.h"
+#endif
 #include "fg.h"
 #include "sr.h"
 #include <cstdio>
@@ -45,6 +49,10 @@ static void toGeneral(anf4r_context* c, VkCommandBuffer cb, const anf4r_image& i
 int anf4r_create(anf4r_context** out, PFN_vkGetInstanceProcAddr gipa, VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32_t family, const char* dataDir) {
     auto* c = new anf4r_context(); c->dataDir = dataDir ? dataDir : ".";
     if (!anf4r::loadVulkan(gipa, inst, dev)) { delete c; return -1; }
+#ifdef ANF4R_HIPVK
+    anf4r::g_hipDir = c->dataDir + "/hip";   // the passes' code objects (scripts/build_hip.py, built by the installer for this GPU)
+    hipvk::setKernelDir(anf4r::g_hipDir);    // and hipvk's format-converting blit (hipvk_blit.hsaco)
+#endif
     if (!c->ctx.adopt(inst, phys, dev, family)) { delete c; return -2; }
     { std::ifstream t(c->dataDir + "/anf4r.log", std::ios::ate); if (t && t.tellg() > 65536) { t.close(); std::remove((c->dataDir + "/anf4r.log").c_str()); } }   // append; keep it small
     logLine(c->dataDir, "GPU: " + c->ctx.deviceName + " | int8 cooperative matrices: " + (c->ctx.coopInt8 ? "yes" : "no") + " | subgroup 32: " + (c->ctx.subgroup32 ? "yes" : "no") +

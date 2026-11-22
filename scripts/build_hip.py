@@ -39,7 +39,7 @@ def main():
     a = ap.parse_args()
     clang, lld = tool('clang', a.llvm), tool('ld.lld', a.llvm)
     os.makedirs(a.out, exist_ok=True)
-    srcs = sorted(glob.glob(os.path.join(ROOT, 'kernels', 'hip', '*.cl')))
+    srcs = sorted(glob.glob(os.path.join(ROOT, 'kernels', 'hip', '*.cl'))) + [os.path.join(ROOT, 'runtime', 'hipvk', 'hipvk_blit.cl')]
     if a.names:
         srcs = [s for s in srcs if os.path.splitext(os.path.basename(s))[0] in a.names]
     for s in srcs:
