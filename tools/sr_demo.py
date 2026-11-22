@@ -35,7 +35,7 @@ with open('build/sr_in.bin', 'wb') as f:
     for k in range(N):
         f.write(struct.pack('<2f', *jit[k])); f.write(frames[k].astype('<f4').tobytes())
         f.write(np.full((H, W), 0.5, '<f4').tobytes()); f.write(np.zeros((H, W, 2), '<f4').tobytes())
-cmd = ['build/cm/sr_run', 'build/sr_in.bin', 'build/sr_out.bin'] + ([model] if model else [])
+cmd = [os.environ.get('SR_RUN', 'build/cm/sr_run'), 'build/sr_in.bin', 'build/sr_out.bin'] + ([model] if model else [])
 print(subprocess.run(cmd, capture_output=True, text=True).stdout.strip())
 out = np.fromfile('build/sr_out.bin', dtype='<f4').reshape(N, 2 * H, 2 * W, 3)
 def disp(a): return np.clip(a, 0, 1) ** (1 / GAMMA)

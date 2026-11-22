@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "vkfn.h"
+#ifdef ANF4R_HIPVK
+#include "hipvk/hipvk.h"
+#include <cstdio>
+#endif
 
 #ifdef ANF4R_DYNAMIC_VK
 #define ANF4R_VK_DEFINE(f) PFN_##f f = nullptr;
@@ -13,7 +17,13 @@ namespace anf4r {
 PFN_vkGetInstanceProcAddr g_gipa = nullptr;
 bool loadVulkan(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkDevice device) {
     g_gipa = gipa;
-#ifdef ANF4R_DYNAMIC_VK
+#ifdef ANF4R_HIPVK
+    // native Windows: the table is hipvk's (Vulkan on AMD's HIP runtime, as in m4r); the arguments are unused
+    (void)instance; (void)device;
+    std::string why;
+    if (!hipvk::install(why)) { std::fprintf(stderr, "anf4r: %s\n", why.c_str()); return false; }
+    return true;
+#elif defined(ANF4R_DYNAMIC_VK)
     bool ok = true;
 #define LI(f) f = reinterpret_cast<PFN_##f>(gipa(instance, #f)); ok &= f != nullptr;
     ANF4R_VK_INSTANCE_FUNCS(LI)

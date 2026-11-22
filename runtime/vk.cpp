@@ -1,5 +1,8 @@
 // anf4r: Vulkan context implementation. SPDX-License-Identifier: GPL-3.0-only
 #include "vk.h"
+#ifdef ANF4R_HIPVK
+#include "hipvk/hipvk.h"
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <string>
@@ -33,6 +36,9 @@ uint32_t Context::memoryType(uint32_t bits, VkMemoryPropertyFlags want) const {
 }
 
 bool Context::create(bool validation) {
+#ifdef ANF4R_HIPVK
+    if (!loadVulkan(nullptr, VK_NULL_HANDLE, VK_NULL_HANDLE)) { error = "HIP runtime (hipvk) unavailable"; return false; }
+#endif
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.apiVersion = VK_API_VERSION_1_3;
     app.pApplicationName = "anf4r";
@@ -89,6 +95,13 @@ void Context::probe() {
     VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; p2.pNext = &sc;
     vkGetPhysicalDeviceProperties2(physical, &p2);
     deviceName = p2.properties.deviceName;
+#ifdef ANF4R_HIPVK
+    // HIP: the matrix-unit kernels are WMMA code objects for RDNA3 (wave32, int8 16x16x16); RDNA4 has its own WMMA encoding
+    // and RDNA2 none, so both take the scalar kernels
+    subgroup32 = true;
+    coopInt8 = hipvk::gpuTarget().rfind("gfx11", 0) == 0 && !getenv("ANF_NO_WMMA");
+    return;
+#endif
     subgroup32 = sc.minSubgroupSize <= 32 && sc.maxSubgroupSize >= 32;
     coopInt8 = false;
     PFN_vkGetInstanceProcAddr gipa =

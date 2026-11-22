@@ -47,8 +47,30 @@ private:
     std::map<uint32_t, VkDescriptorImageInfo> sampInfo_;
     std::map<uint32_t, VkDescriptorBufferInfo> bufInfo_;
     std::map<uint32_t, BindKind> kindOf_;
+#ifdef ANF4R_HIPVK
+    std::vector<int32_t> spec_;   // the specialisation constants by id: the HIP ports read them from the argument block
+    uint32_t specSet_[2] = {};
+#endif
 };
 
+#ifdef ANF4R_HIPVK
+// Native Windows (hipvk): a pass is the code object of the kernel's OpenCL C port (kernels/hip/<name>.cl, built by
+// scripts/build_hip.py into <g_hipDir>/<name>.hsaco). Its one kernel argument is the address of this block, in a host-visible ring:
+struct HipArgs {
+    uint64_t slot[64];   // by binding (hipSlot): buffer address (+ offset) / texture record address (sampled descriptor at +0, storage at
+                         // +32) / sampler descriptor address
+    int32_t spec[64];    // specialisation constants by id
+    uint32_t specSet[2]; // bit per id: set by the host (otherwise a port uses the GLSL default, as Vulkan does)
+    uint32_t pad[2];
+    uint32_t push[32];   // push constants
+    uint32_t grid[4];    // the dispatch's thread grid (gridW, gridH, gridZ)
+};
+// Qualcomm's passes number bindings by HLSL register class (t0.. at 0, s0.. at 128, u0.. at 384): 16 slots per class of 128
+inline int hipSlot(uint32_t binding) { return (binding & 127) < 16 && binding < 512 ? int((binding >> 7) * 16 + (binding & 15)) : -1; }
+extern std::string g_hipDir;   // where readSpirv finds the code objects (default "build/hip")
+#endif
+
+// The SPIR-V words of `path`; with ANF4R_HIPVK the bytes of the code object <g_hipDir>/<basename without .spv / .bin>.hsaco.
 std::vector<uint32_t> readSpirv(const std::string& path);
 // Optional profiling hook: called with begin=true before and begin=false after each recorded dispatch.
 extern void (*g_passHook)(VkCommandBuffer, const Pass*, bool begin);

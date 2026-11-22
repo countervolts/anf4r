@@ -49,6 +49,10 @@ static double timeVariant(Context& ctx, const std::vector<uint32_t>& spv, const 
 }
 
 bool buildWmmaConv(Context& ctx, Pass& out, const std::vector<uint32_t>& spv, const WmmaShape& s, const std::string& cacheDir, bool tune) {
+#ifdef ANF4R_HIPVK
+    (void)cacheDir; (void)tune;
+    return buildVariant(ctx, out, spv, s, 0);   // the HIP port is one kernel (kernels/hip/conv_wmma.cl): nothing to choose
+#endif
     int pick = 0;
     if (const char* f = getenv("ANF_WMMA_VARIANT")) pick = std::min(std::max(atoi(f), 0), kNumVariants - 1);
     else if (tune && !getenv("ANF_NO_TUNE") && s.mode != 2) {
