@@ -70,6 +70,8 @@ def main():
         srcs = [s for s in srcs if os.path.splitext(os.path.basename(s))[0] in a.names]
     for s in srcs:
         name = os.path.splitext(os.path.basename(s))[0]
+        if name == 'conv_wmma' and not a.gpu.startswith('gfx11'):
+            continue   # RDNA3's WMMA layout only (the runtime uses the scalar convolution elsewhere)
         compile_cl(s, os.path.join(a.out, name + '.hsaco'), a.gpu, clang, lld)
         print(f'{name}.hsaco')
 
