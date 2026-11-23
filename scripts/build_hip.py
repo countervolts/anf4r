@@ -51,6 +51,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     srcs = sorted(glob.glob(os.path.join(ROOT, 'kernels', 'hip', '*.cl'))) + [os.path.join(ROOT, 'runtime', 'hipvk', 'hipvk_blit.cl')]
     if a.assets:
+        if os.path.dirname(a.spirv_cross):   # CreateProcess does not resolve relative paths with forward slashes
+            a.spirv_cross = os.path.abspath(a.spirv_cross)
         gen = os.path.join(a.out, 'src')
         os.makedirs(gen, exist_ok=True)
         sys.path.insert(0, os.path.join(ROOT, 'tools'))
